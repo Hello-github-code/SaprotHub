@@ -57,6 +57,19 @@ def my_load_model(config):
       from model.protT5.protT5_token_classification_model import ProtT5TokenClassificationModel
       return ProtT5TokenClassificationModel(**model_config)
 
+    if model_type == "prosst/prosst_classification_model":
+      from model.prosst.prosst_classification_model import ProSSTClassificationModel
+      return ProSSTClassificationModel(**model_config)
+
+    if model_type == "prosst/prosst_regression_model":
+      if 'num_labels' in model_config: del model_config['num_labels']
+      from model.prosst.prosst_regression_model import ProSSTRegressionModel
+      return ProSSTRegressionModel(**model_config)
+
+    if model_type == "prosst/prosst_mutation_model":
+      from model.prosst.prosst_mutation_model import ProSSTMutationModel
+      return ProSSTMutationModel(**model_config)
+
 
 ################################################################################
 ################################ load dataset ##################################
@@ -99,6 +112,18 @@ def my_load_dataset(config):
     if dataset_type == "protT5/protT5_token_classification_dataset":
       from dataset.protT5.protT5_token_classification_dataset import ProtT5TokenClassificationDataset
       return ProtT5TokenClassificationDataset(**dataset_config)
+
+    if dataset_type == "prosst/prosst_classification_dataset":
+      from dataset.prosst.prosst_classification_dataset import ProSSTClassificationDataset
+      return ProSSTClassificationDataset(**dataset_config)
+
+    if dataset_type == "prosst/prosst_regression_dataset":
+      from dataset.prosst.prosst_regression_dataset import ProSSTRegressionDataset
+      return ProSSTRegressionDataset(**dataset_config)
+
+    if dataset_type == "prosst/prosst_mutation_dataset":
+      from dataset.prosst.prosst_mutation_dataset import ProSSTMutationDataset
+      return ProSSTMutationDataset(**dataset_config)
 
 def load_wandb(config):
     # initialize wandb

@@ -120,20 +120,21 @@ def _load_model(
     checkpoint_path: str,
     num_labels: int,
     device: torch.device,
+    load_pretrained: bool = False,
 ):
     if task_type == "classification":
         model = ProSSTClassificationModel(
             num_labels=num_labels,
             config_path=model_path,
             from_checkpoint=checkpoint_path,
-            load_pretrained=True,
+            load_pretrained=load_pretrained,
             lr_scheduler_kwargs={"class": "ConstantLRScheduler", "init_lr": 0.0},
         )
     elif task_type == "regression":
         model = ProSSTRegressionModel(
             config_path=model_path,
             from_checkpoint=checkpoint_path,
-            load_pretrained=True,
+            load_pretrained=load_pretrained,
             lr_scheduler_kwargs={"class": "ConstantLRScheduler", "init_lr": 0.0},
         )
     else:
@@ -158,6 +159,7 @@ def predict_csv(
     max_length: int = 2046,
     device: str = None,
     structure_base_dir: str = None,
+    load_pretrained: bool = False,
 ) -> pd.DataFrame:
     if not checkpoint_path:
         raise ValueError("checkpoint_path is required for ProSST prediction.")
@@ -191,7 +193,14 @@ def predict_csv(
         structure_tokens_list.append([int(token) for token in structure_tokens])
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-    model = _load_model(task_type, model_path, checkpoint_path, num_labels, device)
+    model = _load_model(
+        task_type,
+        model_path,
+        checkpoint_path,
+        num_labels,
+        device,
+        load_pretrained=load_pretrained,
+    )
 
     output_chunks = []
     for start in range(0, len(sequences), batch_size):
@@ -239,6 +248,15 @@ def get_args():
     parser.add_argument("--max_length", type=int, default=2046)
     parser.add_argument("--device", default=None)
     parser.add_argument("--structure_base_dir", default=None)
+    parser.add_argument(
+        "--load_pretrained",
+        action="store_true",
+        help=(
+            "Load the full base ProSST weights before applying the checkpoint. "
+            "By default prediction builds the model from config because "
+            "ColabProSST checkpoints contain the full model state dict."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -257,6 +275,7 @@ def main():
         max_length=args.max_length,
         device=args.device,
         structure_base_dir=args.structure_base_dir,
+        load_pretrained=args.load_pretrained,
     )
 
 

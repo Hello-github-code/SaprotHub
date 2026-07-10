@@ -181,6 +181,164 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
         )
 
 
+class ColabProSSTInferenceTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import pandas
+        import torch
+
+        from saprot.scripts import mutation_zeroshot_prosst, predict_prosst
+
+        cls.pd = pandas
+        cls.torch = torch
+        cls.mutation = mutation_zeroshot_prosst
+        cls.prediction = predict_prosst
+
+    class FakeTokenizer:
+        vocab = {"A": 3, "C": 4, "D": 5, "E": 6}
+
+        def get_vocab(self):
+            return self.vocab
+
+        def __call__(self, sequences, return_tensors="pt"):
+            rows = []
+            for sequence in sequences:
+                rows.append([1, *[self.vocab[aa] for aa in sequence], 2])
+            return {
+                "input_ids": ColabProSSTInferenceTest.torch.tensor(rows),
+                "attention_mask": ColabProSSTInferenceTest.torch.ones(
+                    (len(rows), len(rows[0])), dtype=ColabProSSTInferenceTest.torch.long
+                ),
+            }
+
+        def batch_encode_plus(
+            self,
+            sequences,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=None,
+        ):
+            encoded = [
+                [1, *[self.vocab[aa] for aa in sequence], 2]
+                for sequence in sequences
+            ]
+            target_length = max(len(row) for row in encoded)
+            rows = [row + [0] * (target_length - len(row)) for row in encoded]
+            masks = [
+                [1] * len(row) + [0] * (target_length - len(row))
+                for row in encoded
+            ]
+            return {
+                "input_ids": ColabProSSTInferenceTest.torch.tensor(rows),
+                "attention_mask": ColabProSSTInferenceTest.torch.tensor(masks),
+            }
+
+    class FakeMaskedLM:
+        def to(self, _device):
+            return self
+
+        def eval(self):
+            return self
+
+        def __call__(self, input_ids, **_kwargs):
+            torch = ColabProSSTInferenceTest.torch
+            logits = torch.zeros((input_ids.shape[0], input_ids.shape[1], 25))
+            logits[:, 1, 3] = 1.0
+            logits[:, 1, 4] = 2.0
+            logits[:, 3, 3] = 4.0
+            logits[:, 3, 5] = 1.0
+            return types.SimpleNamespace(logits=logits)
+
+    def test_zero_shot_score_uses_log_probability_differences(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            input_csv = root / "mutations.csv"
+            output_csv = root / "scores.csv"
+            self.pd.DataFrame(
+                [
+                    {
+                        "sequence": "ACD",
+                        "mutant": "A1C:D3A",
+                        "structure_tokens": "0 1 2",
+                    }
+                ]
+            ).to_csv(input_csv, index=False)
+
+            with patch.object(
+                self.mutation.AutoTokenizer,
+                "from_pretrained",
+                return_value=self.FakeTokenizer(),
+            ), patch.object(
+                self.mutation.AutoModelForMaskedLM,
+                "from_pretrained",
+                return_value=self.FakeMaskedLM(),
+            ):
+                result = self.mutation.score_mutants(
+                    input_csv=str(input_csv),
+                    output_csv=str(output_csv),
+                    device="cpu",
+                )
+
+            self.assertAlmostEqual(result.loc[0, "score"], 4.0, places=5)
+            self.assertTrue(output_csv.exists())
+
+    def test_prediction_writes_class_probabilities(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            input_csv = root / "prediction.csv"
+            output_csv = root / "predictions.csv"
+            checkpoint = root / "model.pt"
+            checkpoint.touch()
+            self.pd.DataFrame(
+                [
+                    {"sequence": "ACD", "structure_tokens": "0 1 2"},
+                    {"sequence": "ACE", "structure_tokens": "3 4 5"},
+                ]
+            ).to_csv(input_csv, index=False)
+
+            class FakePredictionModel:
+                def forward(inner_self, inputs):
+                    batch_size = inputs["input_ids"].shape[0]
+                    return self.torch.tensor([[0.0, 2.0], [3.0, 1.0]])[
+                        :batch_size
+                    ]
+
+            with patch.object(
+                self.prediction.AutoTokenizer,
+                "from_pretrained",
+                return_value=self.FakeTokenizer(),
+            ), patch.object(
+                self.prediction,
+                "_load_model",
+                return_value=FakePredictionModel(),
+            ):
+                result = self.prediction.predict_csv(
+                    input_csv=str(input_csv),
+                    output_csv=str(output_csv),
+                    task_type="classification",
+                    checkpoint_path=str(checkpoint),
+                    num_labels=2,
+                    batch_size=2,
+                    device="cpu",
+                )
+
+            self.assertEqual(result["pred"].tolist(), [1, 0])
+            self.assertIn("prob_0", result.columns)
+            self.assertIn("prob_1", result.columns)
+            self.assertTrue(output_csv.exists())
+
+    def test_prediction_rejects_invalid_batch_size_before_loading_model(self):
+        with self.assertRaisesRegex(ValueError, "batch_size must be at least 1"):
+            self.prediction.predict_csv(
+                input_csv="unused.csv",
+                output_csv="unused-output.csv",
+                task_type="classification",
+                checkpoint_path="unused.pt",
+                batch_size=0,
+            )
+
+
 @unittest.skipUnless(
     importlib.util.find_spec("ipywidgets") is not None,
     "ipywidgets is installed only in the Colab UI runtime",

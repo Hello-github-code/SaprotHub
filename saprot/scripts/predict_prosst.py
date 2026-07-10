@@ -161,6 +161,12 @@ def predict_csv(
     structure_base_dir: str = None,
     load_pretrained: bool = False,
 ) -> pd.DataFrame:
+    if task_type not in {"classification", "regression"}:
+        raise ValueError("task_type must be `classification` or `regression`.")
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1.")
+    if task_type == "classification" and num_labels < 2:
+        raise ValueError("Classification num_labels must be at least 2.")
     if not checkpoint_path:
         raise ValueError("checkpoint_path is required for ProSST prediction.")
     checkpoint = Path(checkpoint_path)
@@ -169,6 +175,8 @@ def predict_csv(
 
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     df = pd.read_csv(input_csv)
+    if df.empty:
+        raise ValueError("ProSST prediction CSV contains no rows.")
     sequence_column = _sequence_column(df.columns)
     csv_dir = Path(input_csv).resolve().parent
 
@@ -176,7 +184,7 @@ def predict_csv(
     structure_tokens_list: List[List[int]] = []
     for row_idx, row in df.iterrows():
         sequence = str(row[sequence_column]).strip().upper()
-        if not sequence:
+        if not sequence or sequence == "NAN":
             raise ValueError(f"ProSST prediction row {row_idx} has an empty sequence.")
         entry = _row_structure_entry(
             row,

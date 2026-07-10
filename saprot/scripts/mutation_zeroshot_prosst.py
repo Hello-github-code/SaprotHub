@@ -149,6 +149,8 @@ def score_mutants(
         raise ValueError(
             "ProSST mutation CSV requires structure_tokens, structure_path, or pdb_path."
         )
+    if df.empty:
+        raise ValueError("ProSST mutation CSV contains no rows.")
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     model = AutoModelForMaskedLM.from_pretrained(model_path, trust_remote_code=True)
@@ -162,6 +164,8 @@ def score_mutants(
 
     for row_idx, row in df.iterrows():
         sequence = str(row["sequence"]).strip().upper()
+        if not sequence or sequence == "NAN":
+            raise ValueError(f"ProSST mutation row {row_idx} has an empty sequence.")
         entry = _row_structure_entry(
             row,
             csv_dir,

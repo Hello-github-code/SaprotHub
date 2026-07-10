@@ -36,6 +36,7 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("ColabProSSTUI(COLABPROSST_WORKFLOW)", source)
         self.assertIn("COLABPROSST_UI.launch()", source)
         self.assertIn("probe_runtime()", source)
+        self.assertIn("import ipywidgets; import jupyter_ui_poll", source)
         self.assertNotIn("WORKFLOW", assigned_names)
         self.assertNotIn("os.environ['TRANSFORMERS_CACHE']", source)
 
@@ -163,7 +164,7 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                "expected=\[0, 1\], observed=\[1, 2\]",
+                r"expected=\[0, 1\], observed=\[1, 2\]",
             ):
                 self.workflow_class._validate_training_labels(
                     str(csv_path), "classification", 2

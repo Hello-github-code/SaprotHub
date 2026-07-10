@@ -423,10 +423,13 @@ class ColabProSSTWorkflow:
         freeze_backbone: bool = True,
         gradient_checkpointing: bool = True,
         load_pretrained: bool = True,
+        learning_rate: float = 2.0e-5,
         download: bool = True,
     ) -> dict:
         if task_type not in {"classification", "regression"}:
             raise ValueError("task_type must be classification or regression.")
+        if learning_rate <= 0:
+            raise ValueError("learning_rate must be greater than zero.")
 
         input_csv = self._prepare_input_csv(
             input_csv,
@@ -471,7 +474,10 @@ class ColabProSSTWorkflow:
             "gradient_checkpointing": gradient_checkpointing,
             "save_path": str(checkpoint_path),
             "test_result_path": str(test_result_csv),
-            "lr_scheduler_kwargs": {"class": "ConstantLRScheduler", "init_lr": 2.0e-5},
+            "lr_scheduler_kwargs": {
+                "class": "ConstantLRScheduler",
+                "init_lr": float(learning_rate),
+            },
             "optimizer_kwargs": {"class": "AdamW", "betas": [0.9, 0.98], "weight_decay": 0.01},
         }
         if task_type == "classification":

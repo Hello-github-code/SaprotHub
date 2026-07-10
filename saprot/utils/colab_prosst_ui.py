@@ -216,6 +216,16 @@ class ColabProSSTUI:
             )
             raise RuntimeError("Could not stop the running task safely.")
         thread.join(timeout=2)
+        if thread.is_alive():
+            self.active_thread = thread
+            if not silent:
+                with self.system_status:
+                    self.clear_output(wait=True)
+                    print(
+                        "Stop requested. The task is finishing its current native "
+                        "operation; wait before starting another task."
+                    )
+            return
         self.active_thread = None
         if not silent:
             with self.system_status:

@@ -156,6 +156,30 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
                     str(csv_path), "classification", 2
                 )
 
+    def test_classification_labels_must_start_at_zero(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            csv_path = Path(temporary_dir) / "labels.csv"
+            self.pd.DataFrame({"label": [1, 2]}).to_csv(csv_path, index=False)
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "expected=\[0, 1\], observed=\[1, 2\]",
+            ):
+                self.workflow_class._validate_training_labels(
+                    str(csv_path), "classification", 2
+                )
+
+    def test_task_name_cannot_escape_workflow_directories(self):
+        for task_name in ["", ".", "..", "../outside", "folder\\outside"]:
+            with self.subTest(task_name=task_name):
+                with self.assertRaises(ValueError):
+                    self.workflow_class._validate_task_name(task_name)
+
+        self.assertEqual(
+            self.workflow_class._validate_task_name("My-ProSST_Task.1"),
+            "My-ProSST_Task.1",
+        )
+
 
 @unittest.skipUnless(
     importlib.util.find_spec("ipywidgets") is not None,

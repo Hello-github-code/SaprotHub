@@ -348,8 +348,16 @@ class ColabProSSTWorkflow:
             raise ValueError("Training CSV must contain a label column.")
 
         if task_type == "classification":
-            labels = df[label_column].dropna()
-            unique_labels = sorted(labels.astype(int).unique().tolist())
+            if int(num_labels) < 2:
+                raise ValueError("Classification num_labels must be at least 2.")
+            labels = pd.to_numeric(df[label_column].dropna(), errors="raise")
+            integer_labels = labels.astype(int)
+            if not labels.equals(integer_labels.astype(labels.dtype)):
+                raise ValueError(
+                    "Classification labels must be integer category IDs in the "
+                    "range 0..NUM_LABELS-1."
+                )
+            unique_labels = sorted(integer_labels.unique().tolist())
             if len(unique_labels) != int(num_labels):
                 raise ValueError(
                     "Classification NUM_LABELS does not match the uploaded dataset: "
@@ -357,8 +365,28 @@ class ColabProSSTWorkflow:
                     f"labels={unique_labels}. If these labels are continuous scores, "
                     "choose the regression workflow instead."
                 )
+            expected_labels = list(range(int(num_labels)))
+            if unique_labels != expected_labels:
+                raise ValueError(
+                    "Classification labels must be contiguous category IDs starting "
+                    f"at 0: expected={expected_labels}, observed={unique_labels}."
+                )
         elif task_type == "regression":
             pd.to_numeric(df[label_column], errors="raise")
+
+    @staticmethod
+    def _validate_task_name(task_name: str) -> str:
+        task_name = str(task_name).strip()
+        if (
+            not task_name
+            or task_name in {".", ".."}
+            or "/" in task_name
+            or "\\" in task_name
+        ):
+            raise ValueError(
+                "task_name must be a non-empty file-name-safe value without path separators."
+            )
+        return task_name
 
     @staticmethod
     def _close_lmdb_datamodule(data_module) -> None:
@@ -430,6 +458,7 @@ class ColabProSSTWorkflow:
             raise ValueError("task_type must be classification or regression.")
         if learning_rate <= 0:
             raise ValueError("learning_rate must be greater than zero.")
+        task_name = self._validate_task_name(task_name)
 
         input_csv = self._prepare_input_csv(
             input_csv,

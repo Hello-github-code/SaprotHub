@@ -16,6 +16,7 @@ from unittest.mock import patch
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NOTEBOOK_PATH = REPO_ROOT / "colab" / "ColabProSST.ipynb"
 UI_PATH = REPO_ROOT / "saprot" / "utils" / "colab_prosst_ui.py"
+README_PATH = REPO_ROOT / "README.md"
 
 
 class ColabProSSTNotebookTest(unittest.TestCase):
@@ -42,6 +43,8 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("probe_runtime()", source)
         self.assertIn("import ipywidgets; import jupyter_ui_poll", source)
         self.assertIn("Runtime > Manage sessions", source)
+        self.assertIn("run_button.png", source)
+        self.assertIn("run_button_working.png", source)
         self.assertIn("warnings.filterwarnings('ignore', category=FutureWarning)", source)
         self.assertIn("os.environ['PYTHONWARNINGS'] = 'ignore::FutureWarning'", source)
         self.assertNotIn("WORKFLOW", assigned_names)
@@ -53,6 +56,15 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("CSV already contains `structure_tokens`", introduction)
         self.assertIn("CSV does not contain `structure_tokens`", introduction)
         self.assertIn("Reuse latest structure conversion", introduction)
+
+    def test_readme_links_to_the_current_prosst_notebook(self):
+        readme = README_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "colab.research.google.com/github/Hello-github-code/SaprotHub/"
+            "blob/prosst/colab/ColabProSST.ipynb",
+            readme,
+        )
+        self.assertIn("Old notebooks saved in Google Drive", readme)
 
     def test_notebook_checks_both_source_checkouts(self):
         notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))

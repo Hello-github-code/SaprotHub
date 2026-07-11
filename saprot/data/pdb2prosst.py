@@ -223,6 +223,31 @@ def serialize_structure_tokens(tokens: Sequence[int]) -> str:
     return " ".join(str(int(token)) for token in tokens)
 
 
+def validate_structure_vocab_metadata(
+    entry: Dict[str, Any],
+    structure_vocab_size: int,
+) -> None:
+    value = entry.get("structure_vocab_size")
+    if value is None or str(value).strip() == "":
+        return
+
+    try:
+        numeric_value = float(value)
+        actual_size = int(numeric_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Invalid structure_vocab_size metadata: {value!r}."
+        ) from exc
+    if numeric_value != actual_size:
+        raise ValueError(f"Invalid structure_vocab_size metadata: {value!r}.")
+    if actual_size != int(structure_vocab_size):
+        raise ValueError(
+            "ProSST structure token vocabulary mismatch: CSV tokens use "
+            f"structure_vocab_size={actual_size}, but the selected model requires "
+            f"{structure_vocab_size}."
+        )
+
+
 def encode_structure_tokens(
     structure_tokens: Union[str, Sequence[int]],
     structure_vocab_size: int = 2048,
@@ -412,6 +437,7 @@ def get_structure_tokens_from_entry(
     cache_dir: Optional[Union[str, Path]] = None,
     structure_vocab_size: int = 2048,
 ) -> List[int]:
+    validate_structure_vocab_metadata(entry, structure_vocab_size)
     tokens = entry.get("structure_tokens")
     if tokens is not None and str(tokens).strip() != "":
         return parse_structure_tokens(tokens)

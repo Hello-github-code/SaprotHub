@@ -399,6 +399,27 @@ class ColabProSSTStructureRuntimeTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires an explicit"):
             resolve_structure_vocab_size("local/custom-model")
 
+    def test_structure_tokens_enforce_the_selected_model_vocabulary(self):
+        from saprot.data.pdb2prosst import (
+            encode_structure_tokens,
+            get_structure_tokens_from_entry,
+        )
+
+        self.assertEqual(encode_structure_tokens([0, 19], 20), [1, 3, 22, 2])
+        with self.assertRaisesRegex(ValueError, r"must be in \[0, 19\]"):
+            encode_structure_tokens([20], 20)
+
+        entry = {
+            "structure_tokens": "0 1 2",
+            "structure_vocab_size": 128,
+        }
+        with self.assertRaisesRegex(ValueError, "vocabulary mismatch"):
+            get_structure_tokens_from_entry(entry, structure_vocab_size=20)
+        self.assertEqual(
+            get_structure_tokens_from_entry(entry, structure_vocab_size=128),
+            [0, 1, 2],
+        )
+
     def test_threadpool_guard_ignores_only_deleted_library_paths(self):
         import threadpoolctl
 
@@ -737,6 +758,40 @@ class ColabProSSTInferenceTest(unittest.TestCase):
             self.assertAlmostEqual(result.loc[0, "score"], 4.0, places=5)
             self.assertTrue(output_csv.exists())
 
+    def test_zero_shot_uses_the_selected_models_structure_vocabulary(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            input_csv = root / "mutations.csv"
+            output_csv = root / "scores.csv"
+            self.pd.DataFrame(
+                [
+                    {
+                        "sequence": "ACD",
+                        "mutant": "A1C",
+                        "structure_tokens": "4095 1 2",
+                        "structure_vocab_size": 4096,
+                    }
+                ]
+            ).to_csv(input_csv, index=False)
+
+            with patch.object(
+                self.mutation.AutoTokenizer,
+                "from_pretrained",
+                return_value=self.FakeTokenizer(),
+            ), patch.object(
+                self.mutation.AutoModelForMaskedLM,
+                "from_pretrained",
+                return_value=self.FakeMaskedLM(),
+            ):
+                result = self.mutation.score_mutants(
+                    input_csv=str(input_csv),
+                    output_csv=str(output_csv),
+                    model_path="AI4Protein/ProSST-4096",
+                    device="cpu",
+                )
+
+            self.assertAlmostEqual(result.loc[0, "score"], 1.0, places=5)
+
     def test_prediction_writes_class_probabilities(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
@@ -790,6 +845,17 @@ class ColabProSSTInferenceTest(unittest.TestCase):
                 task_type="classification",
                 checkpoint_path="unused.pt",
                 batch_size=0,
+            )
+
+    def test_prediction_rejects_model_and_vocabulary_mismatch(self):
+        with self.assertRaisesRegex(ValueError, "requires structure_vocab_size=20"):
+            self.prediction.predict_csv(
+                input_csv="unused.csv",
+                output_csv="unused-output.csv",
+                task_type="classification",
+                checkpoint_path="unused.pt",
+                model_path="AI4Protein/ProSST-20",
+                structure_vocab_size=2048,
             )
 
     def test_prediction_model_uses_explicit_optimizer_config(self):

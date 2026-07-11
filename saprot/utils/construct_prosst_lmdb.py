@@ -120,6 +120,10 @@ def _build_sample(
         raise ValueError("ProSST CSV contains an empty sequence.")
 
     entry = {}
+    if "structure_vocab_size" in row.index and _has_value(
+        row["structure_vocab_size"]
+    ):
+        entry["structure_vocab_size"] = row["structure_vocab_size"]
     if "structure_tokens" in row.index and _has_value(row["structure_tokens"]):
         entry["structure_tokens"] = row["structure_tokens"]
     else:
@@ -161,6 +165,7 @@ def _build_sample(
         "seq": sequence,
         label_key: label,
         "structure_tokens": serialize_structure_tokens(structure_tokens),
+        "structure_vocab_size": int(structure_vocab_size),
     }
     if "pdb_path" in entry:
         sample["pdb_path"] = entry["pdb_path"]

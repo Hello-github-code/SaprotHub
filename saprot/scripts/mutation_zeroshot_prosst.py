@@ -2,7 +2,7 @@ import argparse
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import torch
@@ -20,12 +20,14 @@ try:
         get_structure_tokens_from_entry,
         validate_sequence_and_structure,
     )
+    from saprot.model.prosst.specs import resolve_structure_vocab_size
 except ImportError:
     from data.pdb2prosst import (
         encode_structure_tokens,
         get_structure_tokens_from_entry,
         validate_sequence_and_structure,
     )
+    from model.prosst.specs import resolve_structure_vocab_size
 
 
 MUTATION_RE = re.compile(r"^([A-Z])([0-9]+)([A-Z])$")
@@ -89,12 +91,28 @@ def _row_structure_entry(
         elif "chain" in row.index and pd.notna(row["chain"]):
             entry["chain_id"] = str(row["chain"]).strip()
 
+    if (
+        "structure_vocab_size" in row.index
+        and pd.notna(row["structure_vocab_size"])
+        and str(row["structure_vocab_size"]).strip()
+    ):
+        entry["structure_vocab_size"] = row["structure_vocab_size"]
+
     return entry
 
 
-def _prepare_inputs(tokenizer, sequence: str, structure_tokens: Sequence[int], device):
+def _prepare_inputs(
+    tokenizer,
+    sequence: str,
+    structure_tokens: Sequence[int],
+    structure_vocab_size: int,
+    device,
+):
     tokenized = tokenizer([sequence], return_tensors="pt")
-    encoded_ss = encode_structure_tokens(structure_tokens)
+    encoded_ss = encode_structure_tokens(
+        structure_tokens,
+        structure_vocab_size=structure_vocab_size,
+    )
     if tokenized["input_ids"].shape[1] != len(encoded_ss):
         raise ValueError(
             "ProSST tokenizer input length and structure token length differ after "
@@ -108,8 +126,21 @@ def _prepare_inputs(tokenizer, sequence: str, structure_tokens: Sequence[int], d
 
 
 @torch.no_grad()
-def score_sequence(model, tokenizer, sequence: str, structure_tokens: Sequence[int], device):
-    inputs = _prepare_inputs(tokenizer, sequence, structure_tokens, device)
+def score_sequence(
+    model,
+    tokenizer,
+    sequence: str,
+    structure_tokens: Sequence[int],
+    structure_vocab_size: int,
+    device,
+):
+    inputs = _prepare_inputs(
+        tokenizer,
+        sequence,
+        structure_tokens,
+        structure_vocab_size,
+        device,
+    )
     outputs = model(
         input_ids=inputs["input_ids"],
         attention_mask=inputs["attention_mask"],
@@ -129,10 +160,14 @@ def score_mutants(
     output_csv: str,
     model_path: str = "AI4Protein/ProSST-2048",
     cache_dir: str = None,
-    structure_vocab_size: int = 2048,
+    structure_vocab_size: Optional[int] = None,
     device: str = None,
     structure_base_dir: str = None,
 ) -> pd.DataFrame:
+    structure_vocab_size = resolve_structure_vocab_size(
+        model_path,
+        structure_vocab_size,
+    )
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     df = pd.read_csv(input_csv)
     df.columns = df.columns.str.lower()
@@ -185,6 +220,7 @@ def score_mutants(
                 tokenizer,
                 sequence,
                 structure_tokens,
+                structure_vocab_size,
                 device,
             )
         logits = logit_cache[cache_key]
@@ -207,7 +243,7 @@ def get_args():
     parser.add_argument("--output_csv", required=True)
     parser.add_argument("--model_path", default="AI4Protein/ProSST-2048")
     parser.add_argument("--cache_dir", default=None)
-    parser.add_argument("--structure_vocab_size", type=int, default=2048)
+    parser.add_argument("--structure_vocab_size", type=int, default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--structure_base_dir", default=None)
     return parser.parse_args()

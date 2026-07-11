@@ -1,7 +1,7 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import pandas as pd
 import torch
@@ -22,6 +22,7 @@ try:
     )
     from saprot.model.prosst.prosst_classification_model import ProSSTClassificationModel
     from saprot.model.prosst.prosst_regression_model import ProSSTRegressionModel
+    from saprot.model.prosst.specs import resolve_structure_vocab_size
 except ImportError:
     from data.pdb2prosst import (
         encode_structure_tokens,
@@ -31,6 +32,7 @@ except ImportError:
     )
     from model.prosst.prosst_classification_model import ProSSTClassificationModel
     from model.prosst.prosst_regression_model import ProSSTRegressionModel
+    from model.prosst.specs import resolve_structure_vocab_size
 
 
 def _has_value(value: Any) -> bool:
@@ -54,7 +56,11 @@ def _row_structure_entry(
     lower_columns = {column.lower(): column for column in row.index}
     structure_column = lower_columns.get("structure_tokens")
     if structure_column is not None and _has_value(row[structure_column]):
-        return {"structure_tokens": row[structure_column]}
+        entry = {"structure_tokens": row[structure_column]}
+        vocab_column = lower_columns.get("structure_vocab_size")
+        if vocab_column is not None and _has_value(row[vocab_column]):
+            entry["structure_vocab_size"] = row[vocab_column]
+        return entry
 
     path_column = None
     for name in ["structure_path", "pdb_path"]:
@@ -80,6 +86,9 @@ def _row_structure_entry(
         if column is not None and _has_value(row[column]):
             entry["chain_id"] = str(row[column]).strip()
             break
+    vocab_column = lower_columns.get("structure_vocab_size")
+    if vocab_column is not None and _has_value(row[vocab_column]):
+        entry["structure_vocab_size"] = row[vocab_column]
 
     return entry
 
@@ -161,7 +170,7 @@ def predict_csv(
     num_labels: int = 2,
     batch_size: int = 1,
     cache_dir: str = None,
-    structure_vocab_size: int = 2048,
+    structure_vocab_size: Optional[int] = None,
     max_length: int = 2046,
     device: str = None,
     structure_base_dir: str = None,
@@ -173,6 +182,10 @@ def predict_csv(
         raise ValueError("batch_size must be at least 1.")
     if task_type == "classification" and num_labels < 2:
         raise ValueError("Classification num_labels must be at least 2.")
+    structure_vocab_size = resolve_structure_vocab_size(
+        model_path,
+        structure_vocab_size,
+    )
     if not checkpoint_path:
         raise ValueError("checkpoint_path is required for ProSST prediction.")
     checkpoint = Path(checkpoint_path)
@@ -258,7 +271,7 @@ def get_args():
     parser.add_argument("--num_labels", type=int, default=2)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--cache_dir", default=None)
-    parser.add_argument("--structure_vocab_size", type=int, default=2048)
+    parser.add_argument("--structure_vocab_size", type=int, default=None)
     parser.add_argument("--max_length", type=int, default=2046)
     parser.add_argument("--device", default=None)
     parser.add_argument("--structure_base_dir", default=None)

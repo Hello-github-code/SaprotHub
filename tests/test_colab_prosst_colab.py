@@ -46,11 +46,11 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertNotIn("os.environ['TRANSFORMERS_CACHE']", source)
 
         introduction = "".join(notebook["cells"][0]["source"])
-        self.assertIn("Recommended input workflow", introduction)
-        self.assertIn(
-            "When the CSV already contains `structure_tokens`", introduction
-        )
-        self.assertIn("Upload a Structure ZIP only", introduction)
+        self.assertIn("Prepare sequence and structure inputs", introduction)
+        self.assertIn("Recommended for a first run", introduction)
+        self.assertIn("CSV already contains `structure_tokens`", introduction)
+        self.assertIn("CSV does not contain `structure_tokens`", introduction)
+        self.assertIn("Reuse latest structure conversion", introduction)
 
     def test_notebook_checks_both_source_checkouts(self):
         notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
@@ -84,19 +84,45 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         prediction_source = source.split(
             "def _prediction_menu_page(self):", 1
         )[1].split("def _property_prediction_page(self):", 1)[0]
+        guide_source = source.split("def _input_guide(self):", 1)[1].split(
+            "def _build_system_widgets(self):", 1
+        )[0]
 
         self.assertIn("I want to train my own model", home_source)
         self.assertIn(
             "I want to use existing models to make prediction", home_source
         )
         self.assertIn("I want to share my model publicly", home_source)
-        self.assertIn("Recommended input workflow", home_source)
-        self.assertIn("later training and prediction need only the CSV", home_source)
-        self.assertIn("Upload a Structure ZIP only", home_source)
+        self.assertIn("self._input_guide()", home_source)
+        self.assertIn("Recommended for a first run", guide_source)
+        self.assertIn("CSV contains structure_tokens", guide_source)
+        self.assertIn("CSV contains structure file paths", guide_source)
+        self.assertIn('width="100%"', guide_source)
+        self.assertIn("max_width=self.GUIDE_WIDTH", guide_source)
         self.assertNotIn("convert a protein structure", home_source)
         self.assertNotIn("Download CSV templates", home_source)
         self.assertIn("Convert protein structure to ProSST tokens", prediction_source)
         self.assertIn("Download CSV templates", prediction_source)
+
+    def test_task_pages_require_an_explicit_structure_input_mode(self):
+        source = UI_PATH.read_text(encoding="utf-8")
+
+        self.assertEqual(source.count("structure_input = _StructureInput(self)"), 3)
+        self.assertIn("CSV contains structure_tokens", source)
+        self.assertIn("Reuse latest structure conversion", source)
+        self.assertIn("CSV contains structure file paths", source)
+        self.assertIn("structure_input.reuse_latest", source)
+        self.assertIn("structure_input.structure_zip", source)
+        self.assertNotIn(
+            'description="Reuse tokens from the latest structure conversion"',
+            source,
+        )
+        structure_page = source.split("def _structure_page(self):", 1)[1].split(
+            "def _share_page(self):", 1
+        )[0]
+        self.assertIn("Use these tokens in your next task", structure_page)
+        self.assertIn("Reuse latest structure conversion", structure_page)
+        self.assertIn("lasts only for this running Colab session", structure_page)
 
     def test_background_tasks_never_clear_the_whole_cell(self):
         source = UI_PATH.read_text(encoding="utf-8")
@@ -279,6 +305,38 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
                 with self.subTest(invalid_name=invalid_name):
                     with self.assertRaises(ValueError):
                         workflow.save_uploaded_content(invalid_name, b"")
+
+    def test_reusing_latest_conversion_overrides_other_structure_sources(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            input_csv = root / "input.csv"
+            output_csv = root / "output.csv"
+            self.pd.DataFrame(
+                [
+                    {
+                        "sequence": "ACD",
+                        "structure_tokens": "1 1 1",
+                        "pdb_path": "old.pdb",
+                    }
+                ]
+            ).to_csv(input_csv, index=False)
+
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+            workflow.last_structure = {
+                "sequence": "ACD",
+                "structure_tokens": [7, 8, 9],
+            }
+            workflow.attach_last_structure_tokens(input_csv, output_csv)
+
+            result = self.pd.read_csv(output_csv)
+            self.assertEqual(result.loc[0, "structure_tokens"], "7 8 9")
+            self.assertEqual(result.loc[0, "pdb_path"], "old.pdb")
 
     def test_classification_category_mismatch_is_explicit(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
@@ -552,6 +610,63 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         global_clear_calls = []
         ui.display = lambda *items: rendered.append(items)
         ui.clear_output = lambda **kwargs: global_clear_calls.append(kwargs)
+
+        input_guide = ui._input_guide()
+        self.assertEqual(input_guide.layout.width, "100%")
+        self.assertEqual(input_guide.layout.max_width, ui.GUIDE_WIDTH)
+        self.assertEqual(input_guide.layout.overflow, "visible")
+        self.assertIsNone(input_guide.layout.height)
+        self.assertIn("CSV contains structure_tokens", input_guide.value)
+
+        structure_input = module._StructureInput(ui)
+        self.assertEqual(structure_input.mode.value, structure_input.TOKENS)
+        self.assertEqual(structure_input.zip_upload.path.layout.display, "none")
+        self.assertIn("Upload only the CSV", structure_input.hint.value)
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            tokens_csv = root / "tokens.csv"
+            tokens_csv.write_text(
+                "sequence,structure_tokens\nACD,\"1 2 3\"\n",
+                encoding="utf-8",
+            )
+            sequence_csv = root / "sequence.csv"
+            sequence_csv.write_text("sequence\nACD\n", encoding="utf-8")
+            paths_csv = root / "paths.csv"
+            paths_csv.write_text(
+                "sequence,pdb_path\nACD,protein.pdb\n",
+                encoding="utf-8",
+            )
+
+            structure_input.validate(tokens_csv)
+            with self.assertRaisesRegex(ValueError, "no structure_tokens column"):
+                structure_input.validate(sequence_csv)
+
+            structure_input.mode.value = structure_input.PATHS
+            structure_input.validate(paths_csv)
+            with self.assertRaisesRegex(ValueError, "no pdb_path or structure_path"):
+                structure_input.validate(sequence_csv)
+
+            structure_input.mode.value = structure_input.REUSE
+            with self.assertRaisesRegex(ValueError, "No structure conversion"):
+                structure_input.validate(sequence_csv)
+
+        structure_input.mode.value = structure_input.PATHS
+        self.assertIsNone(structure_input.zip_upload.path.layout.display)
+        structure_input.zip_upload.value = "/tmp/structures.zip"
+        self.assertEqual(
+            structure_input.structure_zip, "/tmp/structures.zip"
+        )
+
+        structure_input.mode.value = structure_input.REUSE
+        self.assertTrue(structure_input.reuse_latest)
+        self.assertEqual(structure_input.structure_zip, "")
+        self.assertIn("No structure has been converted", structure_input.hint.value)
+
+        workflow.last_structure = {"sequence": "ACD"}
+        structure_input = module._StructureInput(ui)
+        structure_input.mode.value = structure_input.REUSE
+        self.assertIn("3 residues", structure_input.hint.value)
 
         pages = [
             ui._home_page,

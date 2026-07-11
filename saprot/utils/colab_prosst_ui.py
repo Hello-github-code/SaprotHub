@@ -1,5 +1,6 @@
 import base64
 import collections
+import csv
 import ctypes
 import pkgutil
 import threading
@@ -113,6 +114,14 @@ class _UploadField:
     def value(self, path):
         self.path.value = str(path or "")
 
+    def set_visible(self, visible):
+        display = None if visible else "none"
+        self.path.layout.display = display
+        self.upload_button.layout.display = display
+        self.status.layout.display = display
+        if not visible:
+            self.inline_upload.layout.display = "none"
+
     def _upload(self, _button):
         self.upload_button.disabled = True
         self.status.value = "Choose one file below, or cancel the upload."
@@ -134,11 +143,126 @@ class _UploadField:
             self.upload_button.disabled = False
 
 
+class _StructureInput:
+    TOKENS = "tokens"
+    REUSE = "reuse"
+    PATHS = "paths"
+
+    def __init__(self, ui):
+        self.ui = ui
+        widgets = ui.widgets
+        self.mode = widgets.RadioButtons(
+            options=[
+                ("CSV contains structure_tokens", self.TOKENS),
+                ("Reuse latest structure conversion", self.REUSE),
+                ("CSV contains structure file paths", self.PATHS),
+            ],
+            value=self.TOKENS,
+            description="Structure input:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width="100%", max_width=ui.GUIDE_WIDTH),
+        )
+        self.hint = widgets.HTML(
+            layout=widgets.Layout(
+                width="100%",
+                max_width=ui.GUIDE_WIDTH,
+                overflow="visible",
+            )
+        )
+        self.zip_upload = _UploadField(
+            ui,
+            "Structure ZIP:",
+            "ZIP containing PDB/mmCIF files referenced by the CSV",
+        )
+        self.items = [self.mode, self.hint, *self.zip_upload.items]
+        self.mode.observe(self._update, names="value")
+        self._update({"new": self.mode.value})
+
+    @property
+    def reuse_latest(self):
+        return self.mode.value == self.REUSE
+
+    @property
+    def structure_zip(self):
+        if self.mode.value != self.PATHS:
+            return ""
+        return self.zip_upload.value
+
+    def validate(self, csv_path):
+        path = Path(csv_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"Input CSV does not exist: {path}")
+
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.reader(handle)
+            try:
+                columns = {column.strip().lower() for column in next(reader)}
+            except StopIteration as exc:
+                raise ValueError("The uploaded CSV is empty.") from exc
+
+        if self.mode.value == self.TOKENS and "structure_tokens" not in columns:
+            raise ValueError(
+                "You selected `CSV contains structure_tokens`, but the uploaded "
+                "CSV has no structure_tokens column. Choose another structure "
+                "input mode or add that column."
+            )
+        if self.mode.value == self.PATHS and not columns.intersection(
+            {"pdb_path", "structure_path"}
+        ):
+            raise ValueError(
+                "You selected `CSV contains structure file paths`, but the "
+                "uploaded CSV has no pdb_path or structure_path column."
+            )
+        if self.mode.value == self.REUSE and getattr(
+            self.ui.workflow, "last_structure", None
+        ) is None:
+            raise ValueError(
+                "No structure conversion is available in this Colab session. "
+                "Run `Convert protein structure to ProSST tokens` first."
+            )
+
+    def _update(self, change):
+        mode = change["new"]
+        self.zip_upload.set_visible(mode == self.PATHS)
+
+        if mode == self.TOKENS:
+            self.hint.value = (
+                "Every CSV row must contain <code>structure_tokens</code>. "
+                "Upload only the CSV; a Structure ZIP is not needed."
+            )
+        elif mode == self.REUSE:
+            last_structure = getattr(self.ui.workflow, "last_structure", None)
+            if last_structure is None:
+                availability = (
+                    "<br><font color='red'>No structure has been converted in "
+                    "this session yet.</font>"
+                )
+            else:
+                sequence_length = len(last_structure.get("sequence", ""))
+                availability = (
+                    f"<br>Latest conversion available: {sequence_length} residues."
+                )
+            self.hint.value = (
+                "First run <b>Convert protein structure to ProSST tokens</b>. "
+                "Then upload a CSV whose every row has the same sequence. "
+                "Do not upload a Structure ZIP."
+                + availability
+            )
+        else:
+            self.hint.value = (
+                "Every CSV row must contain <code>pdb_path</code> or "
+                "<code>structure_path</code>. Upload a Structure ZIP when those "
+                "values are filenames or relative paths. Existing absolute Colab "
+                "paths do not require a ZIP."
+            )
+
+
 class ColabProSSTUI:
     """ColabSaprot-style interactive interface backed by ColabProSSTWorkflow."""
 
     WIDTH = "500px"
     HEIGHT = "30px"
+    GUIDE_WIDTH = "720px"
 
     def __init__(self, workflow):
         try:
@@ -215,6 +339,26 @@ class ColabProSSTUI:
     def _output(self):
         return self.widgets.Output(
             layout=self.widgets.Layout(width="100%", border="0")
+        )
+
+    def _input_guide(self):
+        return self._html(
+            "<h3>Prepare sequence and structure inputs</h3>"
+            "<p>Every protein needs an amino-acid sequence and matching ProSST "
+            "structure tokens. Choose one input method:</p>"
+            "<ol>"
+            "<li><b>Recommended for a first run:</b> convert one PDB/mmCIF "
+            "structure, return to the task, and select <b>Reuse latest structure "
+            "conversion</b>. Every CSV row must contain that same sequence.</li>"
+            "<li><b>CSV contains structure_tokens:</b> upload only the CSV. This "
+            "is the best option for repeated use and future Colab sessions.</li>"
+            "<li><b>CSV contains structure file paths:</b> include "
+            "<code>pdb_path</code> or <code>structure_path</code>, then upload a "
+            "ZIP when those paths are relative filenames.</li>"
+            "</ol>",
+            width="100%",
+            max_width=self.GUIDE_WIDTH,
+            overflow="visible",
         )
 
     def _build_system_widgets(self):
@@ -329,20 +473,7 @@ class ColabProSSTUI:
         title = self._heading(
             "Please choose what you want to do with ColabProSST"
         )
-        input_guide = self._html(
-            "<h3>Recommended input workflow</h3>"
-            "<ol>"
-            "<li>Convert each PDB/mmCIF structure once and save its "
-            "<code>structure_tokens</code> in the CSV.</li>"
-            "<li>When the CSV already contains <code>structure_tokens</code>, "
-            "later training and prediction need only the CSV.</li>"
-            "<li>Upload a Structure ZIP only when the CSV refers to PDB/mmCIF "
-            "file paths.</li>"
-            "</ol>"
-            "Use <b>Reuse tokens from the latest structure conversion</b> only "
-            "when every CSV row contains the same sequence as that structure.",
-            width=self.WIDTH,
-        )
+        input_guide = self._input_guide()
         train_button = self._button(
             "I want to train my own model", width="400px"
         )
@@ -389,16 +520,7 @@ class ColabProSSTUI:
             "Training CSV:",
             "Path to a CSV with sequence, label, stage, and structure input",
         )
-        structure_zip = _UploadField(
-            self,
-            "Structure ZIP:",
-            "Optional ZIP containing PDB/mmCIF files referenced by the CSV",
-        )
-        use_last = widgets.Checkbox(
-            value=False,
-            description="Reuse tokens from the latest structure conversion",
-            style={"description_width": "initial"},
-        )
+        structure_input = _StructureInput(self)
         template_button = self._button(
             "Download CSV templates", width="220px"
         )
@@ -469,12 +591,13 @@ class ColabProSSTUI:
                 raise ValueError(
                     "Task name must be a non-empty file-name-safe value."
                 )
+            structure_input.validate(csv_input.value)
             print("Start training...")
             result = self.workflow.train_downstream(
                 task_type=task_type.value,
                 input_csv=csv_input.value,
-                use_last_structure_tokens=use_last.value,
-                structure_zip=structure_zip.value,
+                use_last_structure_tokens=structure_input.reuse_latest,
+                structure_zip=structure_input.structure_zip,
                 task_name=clean_task_name,
                 num_labels=num_labels.value,
                 max_epochs=epochs.value,
@@ -508,12 +631,11 @@ class ColabProSSTUI:
             model,
             self._heading("Dataset setting:", level=3),
             self._html(
-                "The CSV must contain sequence, label, stage, and either "
-                "structure_tokens or a structure path."
+                "The CSV must contain <code>sequence</code>, <code>label</code>, "
+                "and <code>stage</code>. Then choose one structure input method."
             ),
             *csv_input.items,
-            *structure_zip.items,
-            use_last,
+            *structure_input.items,
             template_button,
             self._heading("Training hyper-parameters:", level=3),
             batch_size,
@@ -599,16 +721,7 @@ class ColabProSSTUI:
             "Prediction CSV:",
             "Path to a CSV with sequence and structure input",
         )
-        structure_zip = _UploadField(
-            self,
-            "Structure ZIP:",
-            "Optional ZIP containing PDB/mmCIF files referenced by the CSV",
-        )
-        use_last = widgets.Checkbox(
-            value=False,
-            description="Reuse tokens from the latest structure conversion",
-            style={"description_width": "initial"},
-        )
+        structure_input = _StructureInput(self)
         batch_size = widgets.Dropdown(
             options=[1, 2, 4, 8, 16, 32],
             value=1,
@@ -638,13 +751,14 @@ class ColabProSSTUI:
                 raise ValueError("Upload a model checkpoint or enter its path.")
             if not csv_input.value:
                 raise ValueError("Upload a prediction CSV or enter its path.")
+            structure_input.validate(csv_input.value)
             print("Start prediction...")
             result = self.workflow.predict_downstream(
                 task_type=task_type.value,
                 input_csv=csv_input.value,
                 checkpoint_path=checkpoint.value,
-                use_last_structure_tokens=use_last.value,
-                structure_zip=structure_zip.value,
+                use_last_structure_tokens=structure_input.reuse_latest,
+                structure_zip=structure_input.structure_zip,
                 num_labels=num_labels.value,
                 batch_size=batch_size.value,
                 model_path=model.value,
@@ -667,8 +781,7 @@ class ColabProSSTUI:
             *checkpoint.items,
             self._heading("Input proteins:", level=3),
             *csv_input.items,
-            *structure_zip.items,
-            use_last,
+            *structure_input.items,
             batch_size,
             download,
             self._separator(),
@@ -685,16 +798,7 @@ class ColabProSSTUI:
             "Mutation CSV:",
             "Path to a CSV with sequence, mutant, and structure input",
         )
-        structure_zip = _UploadField(
-            self,
-            "Structure ZIP:",
-            "Optional ZIP containing PDB/mmCIF files referenced by the CSV",
-        )
-        use_last = widgets.Checkbox(
-            value=False,
-            description="Reuse tokens from the latest structure conversion",
-            style={"description_width": "initial"},
-        )
+        structure_input = _StructureInput(self)
         download = widgets.Checkbox(
             value=True,
             description="Download mutation score CSV",
@@ -706,11 +810,12 @@ class ColabProSSTUI:
         def predict():
             if not csv_input.value:
                 raise ValueError("Upload a mutation CSV or enter its path.")
+            structure_input.validate(csv_input.value)
             print("Start mutational effect prediction...")
             result = self.workflow.run_zero_shot(
                 input_csv=csv_input.value,
-                use_last_structure_tokens=use_last.value,
-                structure_zip=structure_zip.value,
+                use_last_structure_tokens=structure_input.reuse_latest,
+                structure_zip=structure_input.structure_zip,
                 model_path=model.value,
                 download=download.value,
             )
@@ -725,12 +830,11 @@ class ColabProSSTUI:
             model,
             self._heading("Mutation data:", level=3),
             self._html(
-                "The CSV must contain sequence, mutant, and either "
-                "structure_tokens or a structure path."
+                "The CSV must contain <code>sequence</code> and "
+                "<code>mutant</code>. Then choose one structure input method."
             ),
             *csv_input.items,
-            *structure_zip.items,
-            use_last,
+            *structure_input.items,
             download,
             self._separator(),
             start_button,
@@ -766,6 +870,13 @@ class ColabProSSTUI:
         )
         start_button = self._button("Convert structure", style="info")
         output = self._output()
+        next_steps = self._html(
+            "",
+            width="100%",
+            max_width=self.GUIDE_WIDTH,
+            overflow="visible",
+            display="none",
+        )
 
         def convert():
             if not structure.value:
@@ -778,6 +889,20 @@ class ColabProSSTUI:
                 download=download.value,
             )
             self.display(result)
+            next_steps.value = (
+                "<h3>Use these tokens in your next task</h3>"
+                "<ol>"
+                "<li>Click <b>Go back</b> below and open training or the "
+                "prediction task you need.</li>"
+                "<li>Upload a CSV containing the same amino-acid sequence.</li>"
+                "<li>Select <b>Reuse latest structure conversion</b>. Do not "
+                "upload a Structure ZIP.</li>"
+                "</ol>"
+                "The shortcut lasts only for this running Colab session. For a "
+                "future session, keep the downloaded conversion CSV and place "
+                "its <code>structure_tokens</code> in your task CSV."
+            )
+            next_steps.layout.display = None
 
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, convert)
@@ -792,6 +917,7 @@ class ColabProSSTUI:
             self._separator(),
             start_button,
             output,
+            next_steps,
         )
 
     def _share_page(self):

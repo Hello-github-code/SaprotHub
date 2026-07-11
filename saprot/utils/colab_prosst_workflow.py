@@ -304,31 +304,28 @@ class ColabProSSTWorkflow:
 
         df = pd.read_csv(csv_path)
         lower_columns = {column.lower(): column for column in df.columns}
-        has_structure = any(
-            column in lower_columns for column in ["structure_tokens", "structure_path", "pdb_path"]
+        sequence_column = lower_columns.get(
+            "sequence", lower_columns.get("protein")
         )
-
-        if not has_structure:
-            sequence_column = lower_columns.get("sequence", lower_columns.get("protein"))
-            if sequence_column is None:
-                raise ValueError(
-                    "CSV needs a sequence/protein column before reusing the last "
-                    "structure tokens."
-                )
-
-            sequences = df[sequence_column].astype(str).str.strip().str.upper()
-            expected_sequence = str(self.last_structure["sequence"]).strip().upper()
-            mismatched = sequences[sequences != expected_sequence]
-            if not mismatched.empty:
-                raise ValueError(
-                    "Cannot reuse one structure token sequence for CSV rows with "
-                    "different protein sequences. Add per-row structure_tokens/"
-                    "structure_path/pdb_path columns."
-                )
-
-            df["structure_tokens"] = serialize_structure_tokens(
-                self.last_structure["structure_tokens"]
+        if sequence_column is None:
+            raise ValueError(
+                "CSV needs a sequence/protein column before reusing the last "
+                "structure tokens."
             )
+
+        sequences = df[sequence_column].astype(str).str.strip().str.upper()
+        expected_sequence = str(self.last_structure["sequence"]).strip().upper()
+        mismatched = sequences[sequences != expected_sequence]
+        if not mismatched.empty:
+            raise ValueError(
+                "Cannot reuse one structure token sequence for CSV rows with "
+                "different protein sequences. Add per-row structure_tokens/"
+                "structure_path/pdb_path columns."
+            )
+
+        df["structure_tokens"] = serialize_structure_tokens(
+            self.last_structure["structure_tokens"]
+        )
 
         df.to_csv(output_path, index=False)
         return output_path

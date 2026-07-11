@@ -2,6 +2,8 @@ import ast
 import base64
 import importlib.util
 import json
+import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -146,6 +148,98 @@ class ColabProSSTNotebookTest(unittest.TestCase):
             "self.system_status.clear_output(wait=True)", stop_task_source
         )
         self.assertNotIn("self.clear_output", stop_task_source)
+
+
+@unittest.skipUnless(shutil.which("git"), "git is required for bootstrap tests")
+class ColabProSSTBootstrapTest(unittest.TestCase):
+    @staticmethod
+    def _load_bootstrap_functions(root, repo_url):
+        notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
+        tree = ast.parse("".join(notebook["cells"][1]["source"]))
+        function_names = {
+            "checkout_complete",
+            "run_command",
+            "clone_saprothub",
+            "update_saprothub",
+            "project_revision",
+        }
+        functions = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name in function_names
+        ]
+        if {node.name for node in functions} != function_names:
+            raise AssertionError("Could not extract every bootstrap function")
+
+        namespace = {
+            "Path": Path,
+            "ROOT": root,
+            "SAPROT_HOME": root / "SaprotHub",
+            "SAPROT_REQUIRED": [Path("required.txt")],
+            "SAPROTHUB_REPO": repo_url,
+            "SAPROTHUB_BRANCH": "prosst",
+            "shutil": shutil,
+            "subprocess": subprocess,
+        }
+        module = ast.fix_missing_locations(ast.Module(body=functions, type_ignores=[]))
+        exec(compile(module, str(NOTEBOOK_PATH), "exec"), namespace)
+        return namespace
+
+    @staticmethod
+    def _git(*args, cwd=None):
+        return subprocess.check_output(
+            ["git", *map(str, args)],
+            cwd=cwd,
+            text=True,
+            stderr=subprocess.STDOUT,
+        ).strip()
+
+    def test_checkout_clone_update_and_failed_reclone_are_safe(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            remote = root / "remote.git"
+            source = root / "source"
+            runtime = root / "runtime"
+            runtime.mkdir()
+
+            self._git("init", "--bare", remote)
+            self._git("init", "-b", "prosst", source)
+            self._git("config", "user.email", "test@example.com", cwd=source)
+            self._git("config", "user.name", "ColabProSST Test", cwd=source)
+            (source / "required.txt").write_text("version 1", encoding="utf-8")
+            self._git("add", "required.txt", cwd=source)
+            self._git("commit", "-m", "version 1", cwd=source)
+            self._git("remote", "add", "origin", remote.as_uri(), cwd=source)
+            self._git("push", "-u", "origin", "prosst", cwd=source)
+
+            bootstrap = self._load_bootstrap_functions(runtime, remote.as_uri())
+            bootstrap["clone_saprothub"]()
+            checkout = runtime / "SaprotHub"
+            self.assertEqual(
+                (checkout / "required.txt").read_text(encoding="utf-8"),
+                "version 1",
+            )
+
+            (source / "required.txt").write_text("version 2", encoding="utf-8")
+            self._git("add", "required.txt", cwd=source)
+            self._git("commit", "-m", "version 2", cwd=source)
+            self._git("push", cwd=source)
+            expected_revision = self._git("rev-parse", "--short", "HEAD", cwd=source)
+
+            bootstrap["update_saprothub"]()
+            self.assertEqual(
+                (checkout / "required.txt").read_text(encoding="utf-8"),
+                "version 2",
+            )
+            self.assertEqual(bootstrap["project_revision"](), expected_revision)
+
+            bootstrap["SAPROTHUB_REPO"] = (root / "missing.git").as_uri()
+            with self.assertRaises(subprocess.CalledProcessError):
+                bootstrap["clone_saprothub"]()
+            self.assertEqual(
+                (checkout / "required.txt").read_text(encoding="utf-8"),
+                "version 2",
+            )
 
 
 class ColabProSSTStructureRuntimeTest(unittest.TestCase):

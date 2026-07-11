@@ -204,6 +204,22 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         )
         self.assertNotIn("self.clear_output", stop_task_source)
 
+    def test_navigation_uses_page_history_instead_of_a_hardcoded_home(self):
+        source = UI_PATH.read_text(encoding="utf-8")
+        navigation_source = source.split(
+            "def _update_navigation_controls(self):", 1
+        )[1].split("def _start_task(self,", 1)[0]
+
+        self.assertIn(
+            "self.navigation_history.append(previous_page)", navigation_source
+        )
+        self.assertIn(
+            "previous_page = self.navigation_history.pop()", navigation_source
+        )
+        self.assertIn("remember=False", navigation_source)
+        self.assertNotIn("_navigate(self._home_page)", source)
+        self.assertIn("return to the previous", source)
+
 
 @unittest.skipUnless(shutil.which("git"), "git is required for bootstrap tests")
 class ColabProSSTBootstrapTest(unittest.TestCase):
@@ -862,6 +878,37 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             ],
         )
         self.assertIn("Prepare sequence and structure inputs", home_items[4].value)
+
+        ui.navigation_history.clear()
+        ui.current_page = ui._home_page
+        ui._update_navigation_controls()
+        self.assertTrue(ui.back_button.disabled)
+
+        ui._navigate(ui._prediction_menu_page)
+        self.assertEqual(ui.current_page, ui._prediction_menu_page)
+        self.assertEqual(ui.navigation_history, [ui._home_page])
+        self.assertFalse(ui.back_button.disabled)
+
+        ui._navigate(ui._property_prediction_page)
+        self.assertEqual(ui.current_page, ui._property_prediction_page)
+        self.assertEqual(
+            ui.navigation_history,
+            [ui._home_page, ui._prediction_menu_page],
+        )
+
+        history_before_refresh = list(ui.navigation_history)
+        ui._refresh_page()
+        self.assertEqual(ui.current_page, ui._property_prediction_page)
+        self.assertEqual(ui.navigation_history, history_before_refresh)
+
+        ui._go_back()
+        self.assertEqual(ui.current_page, ui._prediction_menu_page)
+        self.assertEqual(ui.navigation_history, [ui._home_page])
+        ui._go_back()
+        self.assertEqual(ui.current_page, ui._home_page)
+        self.assertEqual(ui.navigation_history, [])
+        self.assertTrue(ui.back_button.disabled)
+        global_clear_calls.clear()
 
         pages = [
             ui._home_page,

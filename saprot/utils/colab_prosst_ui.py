@@ -283,6 +283,7 @@ class ColabProSSTUI:
         self.clear_output = clear_output
         self.workflow = workflow
         self.current_page = None
+        self.navigation_history = []
         self.active_thread = None
         self.latest_checkpoint = ""
         self._polling = False
@@ -388,8 +389,8 @@ class ColabProSSTUI:
             layout=self.widgets.Layout(width=self.WIDTH)
         )
 
-        self.back_button.on_click(lambda _button: self._navigate(self._home_page))
-        self.refresh_button.on_click(lambda _button: self._navigate(self.current_page))
+        self.back_button.on_click(lambda _button: self._go_back())
+        self.refresh_button.on_click(lambda _button: self._refresh_page())
         self.stop_button.on_click(lambda _button: self.stop_task())
 
         self.system_widgets = [
@@ -401,21 +402,38 @@ class ColabProSSTUI:
                 [self.back_button, self.refresh_button, self.stop_button]
             ),
             self._html(
-                "<b>Go back:</b> stop the running task and return to the first "
+                "<b>Go back:</b> stop the running task and return to the previous "
                 "interface.<br><b>Refresh:</b> stop the running task and reset the "
                 "current interface.<br><b>Stop:</b> stop the running task."
             ),
             self.system_status,
         ]
 
-    def _navigate(self, page):
+    def _update_navigation_controls(self):
+        self.back_button.disabled = not self.navigation_history
+
+    def _navigate(self, page, remember=True):
         if page is None:
             return
+        previous_page = self.current_page
         self.stop_task(silent=True)
+        if remember and previous_page is not None and previous_page != page:
+            self.navigation_history.append(previous_page)
         self.current_page = page
         self.clear_output(wait=True)
         page()
+        self._update_navigation_controls()
         self.display(*self.system_widgets)
+
+    def _go_back(self):
+        if not self.navigation_history:
+            self._update_navigation_controls()
+            return
+        previous_page = self.navigation_history.pop()
+        self._navigate(previous_page, remember=False)
+
+    def _refresh_page(self):
+        self._navigate(self.current_page, remember=False)
 
     def _start_task(self, button, output, action):
         if self.active_thread is not None and self.active_thread.is_alive():
@@ -1028,8 +1046,10 @@ class ColabProSSTUI:
 
     def launch(self, poll=True):
         """Display the first page and optionally keep Colab widget events alive."""
+        self.navigation_history.clear()
         self.current_page = self._home_page
         self._home_page()
+        self._update_navigation_controls()
         self.display(*self.system_widgets)
 
         if not poll:

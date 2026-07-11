@@ -24,11 +24,12 @@ class ColabProSSTNotebookTest(unittest.TestCase):
     def test_notebook_uses_one_live_interface_cell(self):
         notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
 
-        self.assertEqual(len(notebook["cells"]), 2)
+        self.assertEqual(len(notebook["cells"]), 3)
         self.assertEqual(notebook["cells"][0]["cell_type"], "markdown")
-        self.assertEqual(notebook["cells"][1]["cell_type"], "code")
+        self.assertEqual(notebook["cells"][1]["cell_type"], "markdown")
+        self.assertEqual(notebook["cells"][2]["cell_type"], "code")
 
-        source = "".join(notebook["cells"][1]["source"])
+        source = "".join(notebook["cells"][2]["source"])
         tree = ast.parse(source)
         assigned_names = {
             target.id
@@ -60,6 +61,18 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("CSV does not contain `structure_tokens`", introduction)
         self.assertIn("Reuse latest structure conversion", introduction)
 
+        tutorial = "".join(notebook["cells"][1]["source"])
+        self.assertIn("How to start", tutorial)
+        self.assertIn("youtube.com/watch?v=nmLtjlCI_7M", tutorial)
+        self.assertIn("Switch_Runtime_2.png", tutorial)
+        self.assertIn("to run ColabProSST", tutorial)
+        self.assertIn("T4 GPU", tutorial)
+        self.assertIn("L4 GPU", tutorial)
+        self.assertIn("A100 GPU", tutorial)
+        self.assertIn("ProSST backbone frozen", tutorial)
+        self.assertNotIn("ColabSeprot", tutorial)
+        self.assertNotIn("ProTrek", tutorial)
+
     def test_readme_links_to_the_current_prosst_notebook(self):
         readme = README_PATH.read_text(encoding="utf-8")
         self.assertIn(
@@ -71,7 +84,7 @@ class ColabProSSTNotebookTest(unittest.TestCase):
 
     def test_notebook_checks_both_source_checkouts(self):
         notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
-        source = "".join(notebook["cells"][1]["source"])
+        source = "".join(notebook["cells"][2]["source"])
 
         self.assertIn("saprot/utils/colab_prosst_ui.py", source)
         self.assertIn("prosst/structure/get_sst_seq.py", source)
@@ -80,7 +93,7 @@ class ColabProSSTNotebookTest(unittest.TestCase):
 
     def test_notebook_anchors_and_refreshes_colab_source_checkout(self):
         notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
-        source = "".join(notebook["cells"][1]["source"])
+        source = "".join(notebook["cells"][2]["source"])
 
         self.assertIn("Path('/content')", source)
         self.assertIn("os.chdir(ROOT)", source)
@@ -228,7 +241,7 @@ class ColabProSSTBootstrapTest(unittest.TestCase):
     @staticmethod
     def _load_bootstrap_functions(root, repo_url):
         notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
-        tree = ast.parse("".join(notebook["cells"][1]["source"]))
+        tree = ast.parse("".join(notebook["cells"][2]["source"]))
         function_names = {
             "checkout_complete",
             "run_command",

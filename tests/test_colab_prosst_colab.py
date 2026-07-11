@@ -124,6 +124,13 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("Reuse latest structure conversion", structure_page)
         self.assertIn("lasts only for this running Colab session", structure_page)
 
+        training_page = source.split("def _training_page(self):", 1)[1].split(
+            "def _prediction_menu_page(self):", 1
+        )[0]
+        self.assertIn("The training is completed. You can then", training_page)
+        self.assertIn("is selected automatically in this session", training_page)
+        self.assertIn("self._task_intro(change[\"new\"])", training_page)
+
     def test_background_tasks_never_clear_the_whole_cell(self):
         source = UI_PATH.read_text(encoding="utf-8")
         start_task_source = source.split("def _start_task(self,", 1)[1].split(
@@ -665,8 +672,21 @@ class ColabProSSTWidgetTest(unittest.TestCase):
 
         workflow.last_structure = {"sequence": "ACD"}
         structure_input = module._StructureInput(ui)
-        structure_input.mode.value = structure_input.REUSE
+        self.assertEqual(structure_input.mode.value, structure_input.REUSE)
         self.assertIn("3 residues", structure_input.hint.value)
+
+        rendered.clear()
+        ui._home_page()
+        home_items = rendered[-1]
+        self.assertEqual(
+            [item.description for item in home_items[1:4]],
+            [
+                "I want to train my own model",
+                "I want to use existing models to make prediction",
+                "I want to share my model publicly",
+            ],
+        )
+        self.assertIn("Prepare sequence and structure inputs", home_items[4].value)
 
         pages = [
             ui._home_page,

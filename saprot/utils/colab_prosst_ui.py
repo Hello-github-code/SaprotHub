@@ -27,7 +27,7 @@ class _UploadField:
             layout=widgets.Layout(width=ui.WIDTH, height=ui.HEIGHT),
         )
         self.upload_button = widgets.Button(
-            description="Upload file",
+            description="Upload your file",
             button_style="info",
             layout=widgets.Layout(width=ui.WIDTH, height=ui.HEIGHT),
         )
@@ -151,13 +151,18 @@ class _StructureInput:
     def __init__(self, ui):
         self.ui = ui
         widgets = ui.widgets
+        default_mode = (
+            self.REUSE
+            if getattr(ui.workflow, "last_structure", None) is not None
+            else self.TOKENS
+        )
         self.mode = widgets.RadioButtons(
             options=[
                 ("CSV contains structure_tokens", self.TOKENS),
                 ("Reuse latest structure conversion", self.REUSE),
                 ("CSV contains structure file paths", self.PATHS),
             ],
-            value=self.TOKENS,
+            value=default_mode,
             description="Structure input:",
             style={"description_width": "initial"},
             layout=widgets.Layout(width="100%", max_width=ui.GUIDE_WIDTH),
@@ -323,6 +328,20 @@ class ColabProSSTUI:
             value="classification",
             description="Task type:",
             layout=self.widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
+        )
+
+    @staticmethod
+    def _task_intro(task_type):
+        if task_type == "classification":
+            return (
+                "<font color='red'>What is <b>Protein-level Classification:</b> "
+                "Given a protein, you have some categories and you want to "
+                "predict which category the protein belongs to.</font>"
+            )
+        return (
+            "<font color='red'>What is <b>Protein-level Regression:</b> Given a "
+            "protein, you want to predict a score about its property such as "
+            "stability or enzyme activity.</font>"
         )
 
     def _num_labels(self):
@@ -492,10 +511,10 @@ class ColabProSSTUI:
 
         self.display(
             title,
-            input_guide,
             train_button,
             predict_button,
             share_button,
+            input_guide,
         )
 
     def _training_page(self):
@@ -510,9 +529,7 @@ class ColabProSSTUI:
         task_type = self._task_dropdown()
         num_labels = self._num_labels()
         task_intro = self._html(
-            "<font color='red'>Protein-level Classification predicts which "
-            "category a protein belongs to.</font>",
-            width=self.WIDTH,
+            self._task_intro("classification"), width=self.WIDTH
         )
         model = self._model_dropdown()
         csv_input = _UploadField(
@@ -563,16 +580,17 @@ class ColabProSSTUI:
         )
         start_button = self._button("Start training", style="info")
         output = self._output()
+        finish_hint = self._html(
+            "",
+            width="100%",
+            max_width=self.GUIDE_WIDTH,
+            overflow="visible",
+            display="none",
+        )
 
         def update_task(change):
             num_labels.layout.display = None if change["new"] == "classification" else "none"
-            task_intro.value = (
-                "<font color='red'>Protein-level Classification predicts which "
-                "category a protein belongs to.</font>"
-                if change["new"] == "classification"
-                else "<font color='red'>Protein-level Regression predicts a "
-                "continuous protein property such as stability or activity.</font>"
-            )
+            task_intro.value = self._task_intro(change["new"])
 
         def toggle_advanced(_button):
             show = freeze_backbone.layout.display == "none"
@@ -612,6 +630,20 @@ class ColabProSSTUI:
             print("Training finished.")
             print("Model checkpoint:", result["checkpoint_path"])
             print("Test predictions:", result["test_result_csv"])
+            finish_hint.value = (
+                "<h3>The training is completed. You can then:</h3>"
+                "<ul>"
+                "<li><b>Train again:</b> click <b>Refresh</b>, adjust the "
+                "settings, and start a new task.</li>"
+                "<li><b>Use this model for prediction:</b> click <b>Go back</b>, "
+                "choose <b>I want to use existing models to make prediction</b>, "
+                "then choose <b>Protein property prediction</b>. The checkpoint "
+                "is selected automatically in this session.</li>"
+                "<li><b>Share this model:</b> click <b>Go back</b> and choose "
+                "<b>I want to share my model publicly</b>.</li>"
+                "</ul>"
+            )
+            finish_hint.layout.display = None
 
         task_type.observe(update_task, names="value")
         template_button.on_click(self._download_templates)
@@ -648,6 +680,7 @@ class ColabProSSTUI:
             self._separator(),
             start_button,
             output,
+            finish_hint,
         )
 
     def _prediction_menu_page(self):
@@ -705,9 +738,7 @@ class ColabProSSTUI:
         task_type = self._task_dropdown()
         num_labels = self._num_labels()
         task_intro = self._html(
-            "<font color='red'>Protein-level Classification predicts which "
-            "category a protein belongs to.</font>",
-            width=self.WIDTH,
+            self._task_intro("classification"), width=self.WIDTH
         )
         model = self._model_dropdown()
         checkpoint = _UploadField(
@@ -738,13 +769,7 @@ class ColabProSSTUI:
 
         def update_task(change):
             num_labels.layout.display = None if change["new"] == "classification" else "none"
-            task_intro.value = (
-                "<font color='red'>Protein-level Classification predicts which "
-                "category a protein belongs to.</font>"
-                if change["new"] == "classification"
-                else "<font color='red'>Protein-level Regression predicts a "
-                "continuous protein property such as stability or activity.</font>"
-            )
+            task_intro.value = self._task_intro(change["new"])
 
         def predict():
             if not checkpoint.value:

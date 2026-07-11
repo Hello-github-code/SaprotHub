@@ -122,21 +122,27 @@ def _load_model(
     device: torch.device,
     load_pretrained: bool = False,
 ):
+    common_kwargs = {
+        "config_path": model_path,
+        "from_checkpoint": checkpoint_path,
+        "load_pretrained": load_pretrained,
+        "lr_scheduler_kwargs": {
+            "class": "ConstantLRScheduler",
+            "init_lr": 0.0,
+        },
+        "optimizer_kwargs": {
+            "class": "AdamW",
+            "betas": [0.9, 0.98],
+            "weight_decay": 0.01,
+        },
+    }
     if task_type == "classification":
         model = ProSSTClassificationModel(
             num_labels=num_labels,
-            config_path=model_path,
-            from_checkpoint=checkpoint_path,
-            load_pretrained=load_pretrained,
-            lr_scheduler_kwargs={"class": "ConstantLRScheduler", "init_lr": 0.0},
+            **common_kwargs,
         )
     elif task_type == "regression":
-        model = ProSSTRegressionModel(
-            config_path=model_path,
-            from_checkpoint=checkpoint_path,
-            load_pretrained=load_pretrained,
-            lr_scheduler_kwargs={"class": "ConstantLRScheduler", "init_lr": 0.0},
-        )
+        model = ProSSTRegressionModel(**common_kwargs)
     else:
         raise ValueError("task_type must be `classification` or `regression`.")
 

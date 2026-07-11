@@ -452,6 +452,37 @@ class ColabProSSTInferenceTest(unittest.TestCase):
                 batch_size=0,
             )
 
+    def test_prediction_model_uses_explicit_optimizer_config(self):
+        class FakeModel:
+            def to(self, _device):
+                return self
+
+            def eval(self):
+                return None
+
+        cases = [
+            ("classification", "ProSSTClassificationModel"),
+            ("regression", "ProSSTRegressionModel"),
+        ]
+        for task_type, constructor_name in cases:
+            with self.subTest(task_type=task_type), patch.object(
+                self.prediction,
+                constructor_name,
+                return_value=FakeModel(),
+            ) as constructor:
+                self.prediction._load_model(
+                    task_type=task_type,
+                    model_path="AI4Protein/ProSST-2048",
+                    checkpoint_path="model.pt",
+                    num_labels=2,
+                    device=self.torch.device("cpu"),
+                )
+
+                optimizer = constructor.call_args.kwargs["optimizer_kwargs"]
+                self.assertEqual(optimizer["class"], "AdamW")
+                self.assertEqual(optimizer["betas"], [0.9, 0.98])
+                self.assertEqual(optimizer["weight_decay"], 0.01)
+
 
 @unittest.skipUnless(
     importlib.util.find_spec("ipywidgets") is not None,

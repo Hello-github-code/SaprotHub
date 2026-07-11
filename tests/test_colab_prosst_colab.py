@@ -48,6 +48,8 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("run_button_working.png", source)
         self.assertIn("warnings.filterwarnings('ignore', category=FutureWarning)", source)
         self.assertIn("os.environ['PYTHONWARNINGS'] = 'ignore::FutureWarning'", source)
+        self.assertNotIn("#@param", source)
+        self.assertNotIn("DOWNLOAD_CSV_TEMPLATES", source)
         self.assertNotIn("WORKFLOW", assigned_names)
         self.assertNotIn("os.environ['TRANSFORMERS_CACHE']", source)
 

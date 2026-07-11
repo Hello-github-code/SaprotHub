@@ -251,34 +251,21 @@ class ColabProSSTUI:
         predict_button = self._button(
             "I want to use existing models to make prediction", width="400px"
         )
-        structure_button = self._button(
-            "I want to convert a protein structure to tokens", width="400px"
-        )
         share_button = self._button(
             "I want to share my model publicly", width="400px"
-        )
-        template_button = self._button(
-            "Download CSV templates", width="220px"
         )
 
         train_button.on_click(lambda _button: self._navigate(self._training_page))
         predict_button.on_click(
             lambda _button: self._navigate(self._prediction_menu_page)
         )
-        structure_button.on_click(
-            lambda _button: self._navigate(self._structure_page)
-        )
         share_button.on_click(lambda _button: self._navigate(self._share_page))
-        template_button.on_click(self._download_templates)
 
         self.display(
             title,
             train_button,
             predict_button,
-            structure_button,
             share_button,
-            self._separator(),
-            template_button,
         )
 
     def _training_page(self):
@@ -312,6 +299,9 @@ class ColabProSSTUI:
             value=False,
             description="Reuse tokens from the latest structure conversion",
             style={"description_width": "initial"},
+        )
+        template_button = self._button(
+            "Download CSV templates", width="220px"
         )
         batch_size = widgets.Dropdown(
             options=[1, 2, 4, 8, 16, 32],
@@ -402,6 +392,7 @@ class ColabProSSTUI:
             print("Test predictions:", result["test_result_csv"])
 
         task_type.observe(update_task, names="value")
+        template_button.on_click(self._download_templates)
         advanced_button.on_click(toggle_advanced)
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, train)
@@ -424,6 +415,7 @@ class ColabProSSTUI:
             *csv_input.items,
             *structure_zip.items,
             use_last,
+            template_button,
             self._heading("Training hyper-parameters:", level=3),
             batch_size,
             epochs,
@@ -445,15 +437,24 @@ class ColabProSSTUI:
         mutation_button = self._button(
             "Mutational effect prediction", style="info"
         )
+        structure_button = self._button(
+            "Convert protein structure to ProSST tokens", style="info"
+        )
+        template_button = self._button("Download CSV templates")
         property_button.on_click(
             lambda _button: self._navigate(self._property_prediction_page)
         )
         mutation_button.on_click(
             lambda _button: self._navigate(self._mutation_page)
         )
+        structure_button.on_click(
+            lambda _button: self._navigate(self._structure_page)
+        )
+        template_button.on_click(self._download_templates)
         self.display(
             self._heading(
-                "ColabProSST supports multiple prediction tasks. Which one would you like to choose?"
+                "ColabProSST supports multiple prediction tasks, which one "
+                "would you like to choose?"
             ),
             self._separator(),
             property_button,
@@ -468,6 +469,13 @@ class ColabProSSTUI:
                 "single-site or multi-site mutation effects."
             ),
             self._separator(),
+            structure_button,
+            self._html(
+                "Convert a PDB or mmCIF structure into the structure tokens "
+                "required by ProSST."
+            ),
+            self._separator(),
+            template_button,
         )
 
     def _property_prediction_page(self):

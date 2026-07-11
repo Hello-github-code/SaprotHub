@@ -52,6 +52,25 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("prosst/structure/static/AE.pt", source)
         self.assertIn("prosst/structure/static/2048.joblib", source)
 
+    def test_home_menu_matches_colabsaprot_top_level_actions(self):
+        source = UI_PATH.read_text(encoding="utf-8")
+        home_source = source.split("def _home_page(self):", 1)[1].split(
+            "def _training_page(self):", 1
+        )[0]
+        prediction_source = source.split(
+            "def _prediction_menu_page(self):", 1
+        )[1].split("def _property_prediction_page(self):", 1)[0]
+
+        self.assertIn("I want to train my own model", home_source)
+        self.assertIn(
+            "I want to use existing models to make prediction", home_source
+        )
+        self.assertIn("I want to share my model publicly", home_source)
+        self.assertNotIn("convert a protein structure", home_source)
+        self.assertNotIn("Download CSV templates", home_source)
+        self.assertIn("Convert protein structure to ProSST tokens", prediction_source)
+        self.assertIn("Download CSV templates", prediction_source)
+
 
 class ColabProSSTWorkflowTest(unittest.TestCase):
     @classmethod

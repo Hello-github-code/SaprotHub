@@ -3,6 +3,7 @@ import importlib.util
 import json
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -70,6 +71,22 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertNotIn("Download CSV templates", home_source)
         self.assertIn("Convert protein structure to ProSST tokens", prediction_source)
         self.assertIn("Download CSV templates", prediction_source)
+
+    def test_background_tasks_never_clear_the_whole_cell(self):
+        source = UI_PATH.read_text(encoding="utf-8")
+        start_task_source = source.split("def _start_task(self,", 1)[1].split(
+            "def stop_task(self,", 1
+        )[0]
+        stop_task_source = source.split("def stop_task(self,", 1)[1].split(
+            "def _download_templates(self,", 1
+        )[0]
+
+        self.assertIn("output.clear_output(wait=True)", start_task_source)
+        self.assertNotIn("self.clear_output", start_task_source)
+        self.assertIn(
+            "self.system_status.clear_output(wait=True)", stop_task_source
+        )
+        self.assertNotIn("self.clear_output", stop_task_source)
 
 
 class ColabProSSTStructureRuntimeTest(unittest.TestCase):
@@ -438,8 +455,9 @@ class ColabProSSTWidgetTest(unittest.TestCase):
 
         ui = module.ColabProSSTUI(DummyWorkflow())
         rendered = []
+        global_clear_calls = []
         ui.display = lambda *items: rendered.append(items)
-        ui.clear_output = lambda **_kwargs: None
+        ui.clear_output = lambda **kwargs: global_clear_calls.append(kwargs)
 
         pages = [
             ui._home_page,
@@ -455,6 +473,24 @@ class ColabProSSTWidgetTest(unittest.TestCase):
                 rendered.clear()
                 page()
                 self.assertTrue(rendered)
+
+        task_button = ui._button("Run test task")
+        task_output = ui._output()
+        task_started = threading.Event()
+        task_release = threading.Event()
+
+        def task_action():
+            task_started.set()
+            task_release.wait(timeout=5)
+
+        ui._start_task(task_button, task_output, task_action)
+        self.assertTrue(task_started.wait(timeout=5))
+        task_thread = ui.active_thread
+        task_release.set()
+        task_thread.join(timeout=5)
+        self.assertFalse(task_thread.is_alive())
+        ui.stop_task(silent=False)
+        self.assertEqual(global_clear_calls, [])
 
 
 if __name__ == "__main__":

@@ -178,8 +178,8 @@ class ColabProSSTUI:
 
         def runner():
             button.disabled = True
+            output.clear_output(wait=True)
             with output:
-                self.clear_output(wait=True)
                 try:
                     action()
                 except SystemExit:
@@ -200,8 +200,8 @@ class ColabProSSTUI:
         if thread is None or not thread.is_alive():
             self.active_thread = None
             if not silent:
+                self.system_status.clear_output(wait=True)
                 with self.system_status:
-                    self.clear_output(wait=True)
                     print("No running task to be stopped.")
             return
 
@@ -219,8 +219,8 @@ class ColabProSSTUI:
         if thread.is_alive():
             self.active_thread = thread
             if not silent:
+                self.system_status.clear_output(wait=True)
                 with self.system_status:
-                    self.clear_output(wait=True)
                     print(
                         "Stop requested. The task is finishing its current native "
                         "operation; wait before starting another task."
@@ -228,8 +228,8 @@ class ColabProSSTUI:
             return
         self.active_thread = None
         if not silent:
+            self.system_status.clear_output(wait=True)
             with self.system_status:
-                self.clear_output(wait=True)
                 print("Task interrupted by user.")
 
     def _download_templates(self, button):

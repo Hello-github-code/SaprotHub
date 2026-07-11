@@ -85,8 +85,10 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("def update_saprothub():", source)
         self.assertIn("'fetch', '--depth', '50'", source)
         self.assertIn("'.SaprotHub-installing'", source)
-        self.assertIn("def project_revision():", source)
+        self.assertIn("'.ProSST-installing'", source)
+        self.assertIn("def project_revision(home=SAPROT_HOME):", source)
         self.assertIn("ColabProSST source:", source)
+        self.assertIn("Official ProSST source:", source)
         self.assertIn("module_name.startswith('prosst.')", source)
         self.assertNotIn("load_colabprosst_workflow", source)
 
@@ -174,6 +176,7 @@ class ColabProSSTBootstrapTest(unittest.TestCase):
             "clone_saprothub",
             "update_saprothub",
             "project_revision",
+            "ensure_official_prosst",
         }
         functions = [
             node
@@ -190,6 +193,9 @@ class ColabProSSTBootstrapTest(unittest.TestCase):
             "SAPROT_REQUIRED": [Path("required.txt")],
             "SAPROTHUB_REPO": repo_url,
             "SAPROTHUB_BRANCH": "prosst",
+            "PROSST_HOME": root / "ProSST",
+            "PROSST_REQUIRED": [Path("required.txt")],
+            "PROSST_REPO": repo_url,
             "shutil": shutil,
             "subprocess": subprocess,
         }
@@ -223,12 +229,25 @@ class ColabProSSTBootstrapTest(unittest.TestCase):
             self._git("commit", "-m", "version 1", cwd=source)
             self._git("remote", "add", "origin", remote.as_uri(), cwd=source)
             self._git("push", "-u", "origin", "prosst", cwd=source)
+            self._git(
+                "--git-dir",
+                remote,
+                "symbolic-ref",
+                "HEAD",
+                "refs/heads/prosst",
+            )
 
             bootstrap = self._load_bootstrap_functions(runtime, remote.as_uri())
             bootstrap["clone_saprothub"]()
             checkout = runtime / "SaprotHub"
             self.assertEqual(
                 (checkout / "required.txt").read_text(encoding="utf-8"),
+                "version 1",
+            )
+            bootstrap["ensure_official_prosst"]()
+            official_checkout = runtime / "ProSST"
+            self.assertEqual(
+                (official_checkout / "required.txt").read_text(encoding="utf-8"),
                 "version 1",
             )
 
@@ -251,6 +270,15 @@ class ColabProSSTBootstrapTest(unittest.TestCase):
             self.assertEqual(
                 (checkout / "required.txt").read_text(encoding="utf-8"),
                 "version 2",
+            )
+
+            bootstrap["PROSST_REPO"] = (root / "missing.git").as_uri()
+            bootstrap["PROSST_REQUIRED"] = [Path("new-required.txt")]
+            with self.assertRaises(subprocess.CalledProcessError):
+                bootstrap["ensure_official_prosst"]()
+            self.assertEqual(
+                (official_checkout / "required.txt").read_text(encoding="utf-8"),
+                "version 1",
             )
 
 

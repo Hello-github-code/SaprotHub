@@ -1,7 +1,7 @@
 import os
 import types
 from collections.abc import Sequence
-from typing import Dict
+from typing import Dict, Optional
 
 import torch
 from easydict import EasyDict
@@ -9,6 +9,7 @@ from transformers.modeling_outputs import BaseModelOutput
 from transformers import AutoConfig, AutoModelForMaskedLM, AutoTokenizer
 
 from ..abstract_model import AbstractModel
+from .specs import resolve_structure_vocab_size
 
 
 class ProSSTBaseModel(AbstractModel):
@@ -16,6 +17,7 @@ class ProSSTBaseModel(AbstractModel):
         self,
         task: str,
         config_path: str = "AI4Protein/ProSST-2048",
+        structure_vocab_size: Optional[int] = None,
         extra_config: dict = None,
         load_pretrained: bool = True,
         freeze_backbone: bool = False,
@@ -26,6 +28,10 @@ class ProSSTBaseModel(AbstractModel):
         assert task in ["classification", "regression", "lm", "base"]
         self.task = task
         self.config_path = config_path
+        self.structure_vocab_size = resolve_structure_vocab_size(
+            config_path,
+            structure_vocab_size,
+        )
         self.extra_config = extra_config or {}
         self.load_pretrained = load_pretrained
         self.freeze_backbone = freeze_backbone
@@ -321,9 +327,31 @@ class ProSSTBaseModel(AbstractModel):
     def loss_func(self, stage: str, outputs, labels) -> torch.Tensor:
         raise NotImplementedError
 
-    def save_checkpoint(self, save_path: str, save_info: dict = None, save_weights_only: bool = True) -> None:
+    def _checkpoint_metadata(self) -> dict:
+        return {
+            "colabprosst": {
+                "base_model": self.config_path,
+                "structure_vocab_size": self.structure_vocab_size,
+                "task": self.task,
+            }
+        }
+
+    def save_checkpoint(
+        self,
+        save_path: str,
+        save_info: dict = None,
+        save_weights_only: bool = True,
+    ) -> None:
+        checkpoint_info = self._checkpoint_metadata()
+        if save_info is not None:
+            checkpoint_info.update(save_info)
+
         if not self.lora_kwargs:
-            return super().save_checkpoint(save_path, save_info, save_weights_only)
+            return super().save_checkpoint(
+                save_path,
+                checkpoint_info,
+                save_weights_only,
+            )
 
         try:
             if hasattr(self.trainer.strategy, "deepspeed_engine"):

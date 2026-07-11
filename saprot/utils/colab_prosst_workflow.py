@@ -14,11 +14,13 @@ from saprot.data.pdb2prosst import (
 )
 from saprot.scripts.mutation_zeroshot_prosst import score_mutants
 from saprot.scripts.predict_prosst import predict_csv
+from saprot.model.prosst.specs import (
+    DEFAULT_PROSST_MODEL,
+    MODEL_PROSST_2048,
+    resolve_structure_vocab_size,
+)
 from saprot.utils.construct_prosst_lmdb import construct_prosst_lmdb
 from saprot.utils.module_loader import load_trainer, my_load_dataset, my_load_model
-
-
-MODEL_PROSST_2048 = "AI4Protein/ProSST-2048"
 
 
 class ColabProSSTWorkflow:
@@ -279,6 +281,7 @@ class ColabProSSTWorkflow:
                 {
                     "sequence": result["sequence"],
                     "structure_tokens": serialize_structure_tokens(result["structure_tokens"]),
+                    "structure_vocab_size": int(result["structure_vocab_size"]),
                     "pdb_path": structure_path,
                     "chain_id": chain or "",
                 }
@@ -295,7 +298,12 @@ class ColabProSSTWorkflow:
 
         return df
 
-    def attach_last_structure_tokens(self, csv_path: str, output_path: str) -> str:
+    def attach_last_structure_tokens(
+        self,
+        csv_path: str,
+        output_path: str,
+        structure_vocab_size: Optional[int] = None,
+    ) -> str:
         if self.last_structure is None:
             raise RuntimeError(
                 "Run structure conversion first, or provide structure_tokens/"
@@ -323,9 +331,27 @@ class ColabProSSTWorkflow:
                 "structure_path/pdb_path columns."
             )
 
+        last_vocab_size = int(
+            self.last_structure.get(
+                "structure_vocab_size",
+                DEFAULT_PROSST_MODEL.structure_vocab_size,
+            )
+        )
+        if (
+            structure_vocab_size is not None
+            and last_vocab_size != int(structure_vocab_size)
+        ):
+            raise ValueError(
+                "Cannot reuse the latest structure tokens with the selected "
+                f"model: tokens use structure_vocab_size={last_vocab_size}, but "
+                f"the model requires {structure_vocab_size}. Convert the "
+                "structure again with the selected model."
+            )
+
         df["structure_tokens"] = serialize_structure_tokens(
             self.last_structure["structure_tokens"]
         )
+        df["structure_vocab_size"] = last_vocab_size
 
         df.to_csv(output_path, index=False)
         return output_path
@@ -336,11 +362,16 @@ class ColabProSSTWorkflow:
         upload_csv: bool,
         use_last_structure_tokens: bool,
         suffix: str,
+        structure_vocab_size: Optional[int] = None,
     ) -> str:
         input_csv = self.maybe_upload_path(input_csv, upload_csv)
         if use_last_structure_tokens:
             output_path = self.output_dir / f"prosst_{suffix}_with_structure.csv"
-            input_csv = self.attach_last_structure_tokens(input_csv, str(output_path))
+            input_csv = self.attach_last_structure_tokens(
+                input_csv,
+                str(output_path),
+                structure_vocab_size=structure_vocab_size,
+            )
         return input_csv
 
     @staticmethod
@@ -409,15 +440,20 @@ class ColabProSSTWorkflow:
         structure_zip: str = "",
         upload_structure_zip: bool = False,
         model_path: str = MODEL_PROSST_2048,
-        structure_vocab_size: int = 2048,
+        structure_vocab_size: Optional[int] = None,
         output_csv: Optional[str] = None,
         download: bool = True,
     ) -> pd.DataFrame:
+        structure_vocab_size = resolve_structure_vocab_size(
+            model_path,
+            structure_vocab_size,
+        )
         input_csv = self._prepare_input_csv(
             input_csv,
             upload_csv,
             use_last_structure_tokens,
             "mutation",
+            structure_vocab_size,
         )
         structure_base_dir = self.maybe_extract_asset_zip(
             structure_zip,
@@ -451,7 +487,7 @@ class ColabProSSTWorkflow:
         max_epochs: int = 2,
         batch_size: int = 1,
         model_path: str = MODEL_PROSST_2048,
-        structure_vocab_size: int = 2048,
+        structure_vocab_size: Optional[int] = None,
         freeze_backbone: bool = True,
         gradient_checkpointing: bool = True,
         load_pretrained: bool = True,
@@ -463,12 +499,17 @@ class ColabProSSTWorkflow:
         if learning_rate <= 0:
             raise ValueError("learning_rate must be greater than zero.")
         task_name = self._validate_task_name(task_name)
+        structure_vocab_size = resolve_structure_vocab_size(
+            model_path,
+            structure_vocab_size,
+        )
 
         input_csv = self._prepare_input_csv(
             input_csv,
             upload_csv,
             use_last_structure_tokens,
             f"{task_type}_train",
+            structure_vocab_size,
         )
         structure_base_dir = self.maybe_extract_asset_zip(
             structure_zip,
@@ -502,6 +543,7 @@ class ColabProSSTWorkflow:
         test_result_csv = self.output_dir / f"{task_name}_{task_type}_test_predictions.csv"
         model_kwargs = {
             "config_path": model_path,
+            "structure_vocab_size": structure_vocab_size,
             "load_pretrained": load_pretrained,
             "freeze_backbone": freeze_backbone,
             "gradient_checkpointing": gradient_checkpointing,
@@ -577,6 +619,8 @@ class ColabProSSTWorkflow:
             "checkpoint_path": str(checkpoint_path),
             "test_result_csv": str(test_result_csv),
             "task_type": task_type,
+            "model_path": model_path,
+            "structure_vocab_size": structure_vocab_size,
         }
 
     def predict_downstream(
@@ -591,18 +635,23 @@ class ColabProSSTWorkflow:
         num_labels: int = 2,
         batch_size: int = 1,
         model_path: str = MODEL_PROSST_2048,
-        structure_vocab_size: int = 2048,
+        structure_vocab_size: Optional[int] = None,
         output_csv: Optional[str] = None,
         download: bool = True,
     ) -> pd.DataFrame:
         if task_type not in {"classification", "regression"}:
             raise ValueError("task_type must be classification or regression.")
+        structure_vocab_size = resolve_structure_vocab_size(
+            model_path,
+            structure_vocab_size,
+        )
 
         input_csv = self._prepare_input_csv(
             input_csv,
             upload_csv,
             use_last_structure_tokens,
             f"{task_type}_predict",
+            structure_vocab_size,
         )
         structure_base_dir = self.maybe_extract_asset_zip(
             structure_zip,
@@ -635,6 +684,7 @@ class ColabProSSTWorkflow:
         task_type: str,
         num_labels: int = 2,
         model_path: str = MODEL_PROSST_2048,
+        structure_vocab_size: Optional[int] = None,
         private: bool = False,
         run_login: bool = True,
         title: str = "ColabProSST model",
@@ -645,6 +695,10 @@ class ColabProSSTWorkflow:
             raise ValueError("Set repo_id, for example: username/Model-ProSST-Task")
         if task_type not in {"classification", "regression"}:
             raise ValueError("task_type must be classification or regression.")
+        structure_vocab_size = resolve_structure_vocab_size(
+            model_path,
+            structure_vocab_size,
+        )
 
         checkpoint = Path(checkpoint_path)
         if not checkpoint.exists():
@@ -667,7 +721,7 @@ class ColabProSSTWorkflow:
             "checkpoint_format": "SaprotHub/ColabProSST torch checkpoint",
             "task_type": task_type,
             "input_format": "amino-acid input_ids + ProSST ss_input_ids",
-            "structure_vocab_size": 2048,
+            "structure_vocab_size": structure_vocab_size,
             "colab_tool": "ColabProSST",
         }
         if task_type == "classification":

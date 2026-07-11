@@ -128,11 +128,13 @@ def _load_model(
     model_path: str,
     checkpoint_path: str,
     num_labels: int,
+    structure_vocab_size: int,
     device: torch.device,
     load_pretrained: bool = False,
 ):
     common_kwargs = {
         "config_path": model_path,
+        "structure_vocab_size": structure_vocab_size,
         "from_checkpoint": checkpoint_path,
         "load_pretrained": load_pretrained,
         "lr_scheduler_kwargs": {
@@ -158,6 +160,42 @@ def _load_model(
     model = model.to(device)
     model.eval()
     return model
+
+
+def _validate_checkpoint_compatibility(
+    checkpoint_path: str,
+    task_type: str,
+    model_path: str,
+    structure_vocab_size: int,
+) -> None:
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    except Exception:
+        # The regular model loader will report unreadable or invalid checkpoints.
+        return
+
+    if not isinstance(checkpoint, dict):
+        return
+    metadata = checkpoint.get("colabprosst")
+    if not isinstance(metadata, dict):
+        return
+
+    expected = {
+        "task": task_type,
+        "base_model": model_path,
+        "structure_vocab_size": int(structure_vocab_size),
+    }
+    mismatches = [
+        f"{key}={metadata[key]!r} (checkpoint), expected {value!r}"
+        for key, value in expected.items()
+        if key in metadata and metadata[key] != value
+    ]
+    if mismatches:
+        raise ValueError(
+            "The ProSST checkpoint is incompatible with the selected settings: "
+            + "; ".join(mismatches)
+            + ". Select the checkpoint's original base model and task."
+        )
 
 
 @torch.no_grad()
@@ -191,6 +229,12 @@ def predict_csv(
     checkpoint = Path(checkpoint_path)
     if not checkpoint.exists():
         raise FileNotFoundError(f"ProSST checkpoint does not exist: {checkpoint}")
+    _validate_checkpoint_compatibility(
+        str(checkpoint),
+        task_type,
+        model_path,
+        structure_vocab_size,
+    )
 
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     df = pd.read_csv(input_csv)
@@ -225,6 +269,7 @@ def predict_csv(
         model_path,
         checkpoint_path,
         num_labels,
+        structure_vocab_size,
         device,
         load_pretrained=load_pretrained,
     )

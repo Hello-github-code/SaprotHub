@@ -420,6 +420,33 @@ class ColabProSSTStructureRuntimeTest(unittest.TestCase):
             [0, 1, 2],
         )
 
+    def test_prosst_checkpoint_records_its_model_contract(self):
+        import torch
+
+        from saprot.model.prosst.base import ProSSTBaseModel
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            checkpoint_path = Path(temporary_dir) / "model.pt"
+            model = object.__new__(ProSSTBaseModel)
+            torch.nn.Module.__init__(model)
+            model.model = torch.nn.Linear(2, 1)
+            model.task = "regression"
+            model.config_path = "AI4Protein/ProSST-20"
+            model.structure_vocab_size = 20
+            model.lora_kwargs = None
+
+            model.save_checkpoint(str(checkpoint_path))
+            checkpoint = torch.load(checkpoint_path, map_location="cpu")
+
+            self.assertEqual(
+                checkpoint["colabprosst"],
+                {
+                    "base_model": "AI4Protein/ProSST-20",
+                    "structure_vocab_size": 20,
+                    "task": "regression",
+                },
+            )
+
     def test_threadpool_guard_ignores_only_deleted_library_paths(self):
         import threadpoolctl
 
@@ -545,6 +572,7 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
                     num_labels=2,
                     max_epochs=1,
                     learning_rate=3.0e-5,
+                    model_path="AI4Protein/ProSST-20",
                     load_pretrained=False,
                     download=False,
                 )
@@ -552,6 +580,10 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
             scheduler = captured["model_config"].kwargs.lr_scheduler_kwargs
             self.assertEqual(scheduler["class"], "ConstantLRScheduler")
             self.assertEqual(scheduler["init_lr"], 3.0e-5)
+            self.assertEqual(
+                captured["model_config"].kwargs.structure_vocab_size,
+                20,
+            )
             self.assertIn("fit", captured)
             self.assertIn("test", captured)
 
@@ -614,7 +646,41 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
 
             result = self.pd.read_csv(output_csv)
             self.assertEqual(result.loc[0, "structure_tokens"], "7 8 9")
+            self.assertEqual(result.loc[0, "structure_vocab_size"], 2048)
             self.assertEqual(result.loc[0, "pdb_path"], "old.pdb")
+
+    def test_reusing_latest_conversion_rejects_a_different_model_family(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            input_csv = root / "input.csv"
+            output_csv = root / "output.csv"
+            self.pd.DataFrame([{"sequence": "ACD"}]).to_csv(
+                input_csv,
+                index=False,
+            )
+
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+            workflow.last_structure = {
+                "sequence": "ACD",
+                "structure_tokens": [7, 8, 9],
+                "structure_vocab_size": 128,
+            }
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "tokens use structure_vocab_size=128",
+            ):
+                workflow.attach_last_structure_tokens(
+                    str(input_csv),
+                    str(output_csv),
+                    structure_vocab_size=2048,
+                )
 
     def test_classification_category_mismatch_is_explicit(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
@@ -858,6 +924,29 @@ class ColabProSSTInferenceTest(unittest.TestCase):
                 structure_vocab_size=2048,
             )
 
+    def test_prediction_rejects_checkpoint_from_another_family_model(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            checkpoint_path = Path(temporary_dir) / "model.pt"
+            self.torch.save(
+                {
+                    "model": {},
+                    "colabprosst": {
+                        "task": "classification",
+                        "base_model": "AI4Protein/ProSST-2048",
+                        "structure_vocab_size": 2048,
+                    },
+                },
+                checkpoint_path,
+            )
+
+            with self.assertRaisesRegex(ValueError, "incompatible"):
+                self.prediction._validate_checkpoint_compatibility(
+                    str(checkpoint_path),
+                    "classification",
+                    "AI4Protein/ProSST-4096",
+                    4096,
+                )
+
     def test_prediction_model_uses_explicit_optimizer_config(self):
         class FakeModel:
             def to(self, _device):
@@ -881,6 +970,7 @@ class ColabProSSTInferenceTest(unittest.TestCase):
                     model_path="AI4Protein/ProSST-2048",
                     checkpoint_path="model.pt",
                     num_labels=2,
+                    structure_vocab_size=2048,
                     device=self.torch.device("cpu"),
                 )
 
@@ -888,6 +978,10 @@ class ColabProSSTInferenceTest(unittest.TestCase):
                 self.assertEqual(optimizer["class"], "AdamW")
                 self.assertEqual(optimizer["betas"], [0.9, 0.98])
                 self.assertEqual(optimizer["weight_decay"], 0.01)
+                self.assertEqual(
+                    constructor.call_args.kwargs["structure_vocab_size"],
+                    2048,
+                )
 
 
 @unittest.skipUnless(

@@ -329,6 +329,20 @@ class ColabProSSTUI:
         title = self._heading(
             "Please choose what you want to do with ColabProSST"
         )
+        input_guide = self._html(
+            "<h3>Recommended input workflow</h3>"
+            "<ol>"
+            "<li>Convert each PDB/mmCIF structure once and save its "
+            "<code>structure_tokens</code> in the CSV.</li>"
+            "<li>When the CSV already contains <code>structure_tokens</code>, "
+            "later training and prediction need only the CSV.</li>"
+            "<li>Upload a Structure ZIP only when the CSV refers to PDB/mmCIF "
+            "file paths.</li>"
+            "</ol>"
+            "Use <b>Reuse tokens from the latest structure conversion</b> only "
+            "when every CSV row contains the same sequence as that structure.",
+            width=self.WIDTH,
+        )
         train_button = self._button(
             "I want to train my own model", width="400px"
         )
@@ -347,6 +361,7 @@ class ColabProSSTUI:
 
         self.display(
             title,
+            input_guide,
             train_button,
             predict_button,
             share_button,

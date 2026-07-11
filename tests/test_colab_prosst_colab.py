@@ -45,6 +45,13 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertNotIn("WORKFLOW", assigned_names)
         self.assertNotIn("os.environ['TRANSFORMERS_CACHE']", source)
 
+        introduction = "".join(notebook["cells"][0]["source"])
+        self.assertIn("Recommended input workflow", introduction)
+        self.assertIn(
+            "When the CSV already contains `structure_tokens`", introduction
+        )
+        self.assertIn("Upload a Structure ZIP only", introduction)
+
     def test_notebook_checks_both_source_checkouts(self):
         notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
         source = "".join(notebook["cells"][1]["source"])
@@ -68,6 +75,9 @@ class ColabProSSTNotebookTest(unittest.TestCase):
             "I want to use existing models to make prediction", home_source
         )
         self.assertIn("I want to share my model publicly", home_source)
+        self.assertIn("Recommended input workflow", home_source)
+        self.assertIn("later training and prediction need only the CSV", home_source)
+        self.assertIn("Upload a Structure ZIP only", home_source)
         self.assertNotIn("convert a protein structure", home_source)
         self.assertNotIn("Download CSV templates", home_source)
         self.assertIn("Convert protein structure to ProSST tokens", prediction_source)

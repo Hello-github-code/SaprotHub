@@ -37,6 +37,9 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("COLABPROSST_UI.launch()", source)
         self.assertIn("probe_runtime()", source)
         self.assertIn("import ipywidgets; import jupyter_ui_poll", source)
+        self.assertIn("Runtime > Manage sessions", source)
+        self.assertIn("warnings.filterwarnings('ignore', category=FutureWarning)", source)
+        self.assertIn("os.environ['PYTHONWARNINGS'] = 'ignore::FutureWarning'", source)
         self.assertNotIn("WORKFLOW", assigned_names)
         self.assertNotIn("os.environ['TRANSFORMERS_CACHE']", source)
 

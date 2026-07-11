@@ -72,6 +72,50 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("Download CSV templates", prediction_source)
 
 
+class ColabProSSTStructureRuntimeTest(unittest.TestCase):
+    def test_threadpool_guard_ignores_only_deleted_library_paths(self):
+        import threadpoolctl
+
+        from saprot.data.pdb2prosst import (
+            _patch_threadpoolctl_stale_library_scan,
+        )
+
+        controller_class = threadpoolctl.ThreadpoolController
+        method_name = "_make_controller_from_path"
+        marker_name = "_colabprosst_stale_library_guard"
+        original = getattr(controller_class, method_name)
+        had_marker = hasattr(controller_class, marker_name)
+        marker_value = getattr(controller_class, marker_name, None)
+
+        def raise_missing_library(_controller, _filepath):
+            raise OSError("cannot open shared object file")
+
+        try:
+            setattr(controller_class, method_name, raise_missing_library)
+            if hasattr(controller_class, marker_name):
+                delattr(controller_class, marker_name)
+
+            _patch_threadpoolctl_stale_library_scan()
+            guarded = getattr(controller_class, method_name)
+            controller = object.__new__(controller_class)
+
+            missing_path = str(
+                Path(tempfile.gettempdir()) / "deleted-colab-numpy-openblas.so"
+            )
+            self.assertFalse(Path(missing_path).exists())
+            self.assertIsNone(guarded(controller, missing_path))
+
+            with tempfile.NamedTemporaryFile() as existing_library:
+                with self.assertRaises(OSError):
+                    guarded(controller, existing_library.name)
+        finally:
+            setattr(controller_class, method_name, original)
+            if had_marker:
+                setattr(controller_class, marker_name, marker_value)
+            elif hasattr(controller_class, marker_name):
+                delattr(controller_class, marker_name)
+
+
 class ColabProSSTWorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

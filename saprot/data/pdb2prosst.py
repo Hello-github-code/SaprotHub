@@ -21,6 +21,35 @@ class ProSSTStructureError(RuntimeError):
     """Raised when ProSST structure token generation fails."""
 
 
+def _patch_threadpoolctl_stale_library_scan() -> None:
+    """Ignore native libraries removed by an in-process package replacement."""
+    try:
+        import threadpoolctl
+    except ImportError:
+        return
+
+    controller_class = getattr(threadpoolctl, "ThreadpoolController", None)
+    if (
+        controller_class is None
+        or not hasattr(controller_class, "_make_controller_from_path")
+        or getattr(controller_class, "_colabprosst_stale_library_guard", False)
+    ):
+        return
+
+    original = controller_class._make_controller_from_path
+
+    def make_controller_from_path(controller, filepath):
+        try:
+            return original(controller, filepath)
+        except OSError:
+            if filepath and not os.path.exists(os.fsdecode(filepath)):
+                return None
+            raise
+
+    controller_class._make_controller_from_path = make_controller_from_path
+    controller_class._colabprosst_stale_library_guard = True
+
+
 def _add_prosst_to_path() -> None:
     candidates = []
     env_home = os.environ.get("PROSST_HOME")
@@ -43,6 +72,7 @@ def _add_prosst_to_path() -> None:
 
 def _load_sst_predictor():
     _add_prosst_to_path()
+    _patch_threadpoolctl_stale_library_scan()
     try:
         sst_module = importlib.import_module("prosst.structure.get_sst_seq")
     except Exception as exc:

@@ -86,14 +86,21 @@ class ColabProSSTWorkflow:
         if not uploaded:
             raise RuntimeError("No file was uploaded.")
 
-        saved_paths = []
-        for filename, content in uploaded.items():
-            safe_name = Path(filename).name
-            save_path = self.upload_dir / safe_name
-            save_path.write_bytes(content)
-            saved_paths.append(save_path)
+        saved_paths = [
+            self.save_uploaded_content(filename, content)
+            for filename, content in uploaded.items()
+        ]
 
         return str(saved_paths[0])
+
+    def save_uploaded_content(self, filename: str, content: bytes) -> str:
+        safe_name = Path(str(filename).replace("\\", "/")).name
+        if not safe_name or safe_name in {".", ".."}:
+            raise ValueError("Uploaded file must have a valid filename.")
+
+        save_path = self.upload_dir / safe_name
+        save_path.write_bytes(bytes(content))
+        return str(save_path)
 
     def maybe_extract_asset_zip(
         self,

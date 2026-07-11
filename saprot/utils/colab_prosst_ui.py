@@ -1,7 +1,11 @@
+import base64
+import collections
 import ctypes
+import pkgutil
 import threading
 import time
 import traceback
+import uuid
 from pathlib import Path
 
 from saprot.utils.colab_prosst_workflow import MODEL_PROSST_2048
@@ -11,6 +15,9 @@ class _UploadField:
     def __init__(self, ui, description, placeholder):
         self.ui = ui
         widgets = ui.widgets
+        upload_id = uuid.uuid4().hex
+        self.input_id = f"colabprosst-files-{upload_id}"
+        self.output_id = f"colabprosst-result-{upload_id}"
         self.path = widgets.Text(
             value="",
             placeholder=placeholder,
@@ -20,14 +27,83 @@ class _UploadField:
         )
         self.upload_button = widgets.Button(
             description="Upload file",
-            layout=widgets.Layout(width="140px", height=ui.HEIGHT),
+            button_style="info",
+            layout=widgets.Layout(width=ui.WIDTH, height=ui.HEIGHT),
         )
-        self.status = widgets.HTML()
+        self.inline_upload = widgets.HTML(
+            value=self._inline_upload_html(),
+            layout=widgets.Layout(width=ui.WIDTH, display="none"),
+        )
+        self.status = widgets.HTML(layout=widgets.Layout(width=ui.WIDTH))
         self.upload_button.on_click(self._upload)
         self.items = [
             self.path,
-            widgets.HBox([self.upload_button, self.status]),
+            self.upload_button,
+            self.inline_upload,
+            self.status,
         ]
+
+    def _inline_upload_html(self):
+        try:
+            files_js = pkgutil.get_data(
+                "google.colab.files", "resources/files.js"
+            )
+        except (ImportError, ModuleNotFoundError):
+            return ""
+        if files_js is None:
+            return ""
+
+        return """
+            <input type="file" id="{input_id}" name="files[]" disabled
+                   style="border:none" />
+            <output id="{output_id}"></output>
+            <script>{files_js}</script>
+        """.format(
+            input_id=self.input_id,
+            output_id=self.output_id,
+            files_js=files_js.decode("utf-8"),
+        )
+
+    def _upload_inline(self):
+        from google.colab import output
+
+        output.eval_js(
+            'document.getElementById("{input_id}").value = ""'.format(
+                input_id=self.input_id
+            )
+        )
+        result = output.eval_js(
+            'google.colab._files._uploadFiles("{input_id}", "{output_id}")'.format(
+                input_id=self.input_id,
+                output_id=self.output_id,
+            )
+        )
+        uploaded_files = collections.defaultdict(bytes)
+        while result["action"] != "complete":
+            result = output.eval_js(
+                'google.colab._files._uploadFilesContinue("{output_id}")'.format(
+                    output_id=self.output_id
+                )
+            )
+            if result["action"] == "append":
+                uploaded_files[result["file"]] += base64.b64decode(result["data"])
+
+        if not uploaded_files:
+            return None
+        filename, content = next(iter(uploaded_files.items()))
+        save_uploaded_content = getattr(
+            self.ui.workflow, "save_uploaded_content", None
+        )
+        if callable(save_uploaded_content):
+            return save_uploaded_content(filename, content)
+
+        safe_name = Path(str(filename).replace("\\", "/")).name
+        if not safe_name or safe_name in {".", ".."}:
+            raise ValueError("Uploaded file must have a valid filename.")
+        save_path = Path(self.ui.workflow.upload_dir) / safe_name
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        save_path.write_bytes(bytes(content))
+        return str(save_path)
 
     @property
     def value(self):
@@ -39,14 +115,22 @@ class _UploadField:
 
     def _upload(self, _button):
         self.upload_button.disabled = True
-        self.status.value = "Uploading..."
+        self.status.value = "Choose one file below, or cancel the upload."
         try:
-            uploaded_path = self.ui.workflow.maybe_upload_path("", True)
+            if self.inline_upload.value:
+                self.inline_upload.layout.display = None
+                uploaded_path = self._upload_inline()
+            else:
+                uploaded_path = self.ui.workflow.maybe_upload_path("", True)
+            if uploaded_path is None:
+                self.status.value = "Upload canceled."
+                return
             self.value = uploaded_path
             self.status.value = f"Uploaded: {Path(uploaded_path).name}"
         except Exception as exc:
             self.status.value = f"<font color='red'>{type(exc).__name__}: {exc}</font>"
         finally:
+            self.inline_upload.layout.display = "none"
             self.upload_button.disabled = False
 
 

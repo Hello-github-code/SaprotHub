@@ -1,4 +1,5 @@
 import ast
+import base64
 import importlib.util
 import json
 import sys
@@ -225,6 +226,35 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
             self.assertIn("fit", captured)
             self.assertIn("test", captured)
 
+    def test_uploaded_content_is_saved_with_a_safe_filename(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+
+            saved_path = Path(
+                workflow.save_uploaded_content("../training.csv", b"a,b\n1,2\n")
+            )
+            self.assertEqual(saved_path.parent, root / "uploads")
+            self.assertEqual(saved_path.name, "training.csv")
+            self.assertEqual(saved_path.read_bytes(), b"a,b\n1,2\n")
+
+            windows_path = Path(
+                workflow.save_uploaded_content("folder\\valid.csv", b"valid")
+            )
+            self.assertEqual(windows_path.name, "valid.csv")
+            self.assertEqual(windows_path.read_bytes(), b"valid")
+
+            for invalid_name in ["", ".", ".."]:
+                with self.subTest(invalid_name=invalid_name):
+                    with self.assertRaises(ValueError):
+                        workflow.save_uploaded_content(invalid_name, b"")
+
     def test_classification_category_mismatch_is_explicit(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
             csv_path = Path(temporary_dir) / "labels.csv"
@@ -450,10 +480,18 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             spec.loader.exec_module(module)
 
         class DummyWorkflow:
+            def __init__(self):
+                self.saved_upload = None
+
             def maybe_upload_path(self, current_path, upload_enabled):
                 return "/tmp/uploaded.file"
 
-        ui = module.ColabProSSTUI(DummyWorkflow())
+            def save_uploaded_content(self, filename, content):
+                self.saved_upload = (filename, content)
+                return f"/tmp/{Path(filename).name}"
+
+        workflow = DummyWorkflow()
+        ui = module.ColabProSSTUI(workflow)
         rendered = []
         global_clear_calls = []
         ui.display = lambda *items: rendered.append(items)
@@ -491,6 +529,85 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         self.assertFalse(task_thread.is_alive())
         ui.stop_task(silent=False)
         self.assertEqual(global_clear_calls, [])
+
+        upload_field = module._UploadField(ui, "Training CSV:", "Choose CSV")
+        upload_field.inline_upload.value = "<input type='file'>"
+        encoded_chunk = base64.b64encode(b"sequence,label\nACD,1\n").decode("ascii")
+
+        class FakeColabOutput:
+            def __init__(self):
+                self.responses = iter(
+                    [
+                        {
+                            "action": "append",
+                            "file": "training.csv",
+                            "data": encoded_chunk,
+                        },
+                        {"action": "complete"},
+                    ]
+                )
+
+            def eval_js(self, javascript):
+                if "_uploadFilesContinue" in javascript:
+                    return next(self.responses)
+                if "_uploadFiles(" in javascript:
+                    return {"action": "starting"}
+                return None
+
+        fake_google = types.ModuleType("google")
+        fake_google.__path__ = []
+        fake_colab = types.ModuleType("google.colab")
+        fake_colab.__path__ = []
+        fake_colab.output = FakeColabOutput()
+        with patch.dict(
+            sys.modules,
+            {"google": fake_google, "google.colab": fake_colab},
+        ):
+            uploaded_path = upload_field._upload_inline()
+
+        self.assertEqual(uploaded_path, "/tmp/training.csv")
+        self.assertEqual(
+            workflow.saved_upload,
+            ("training.csv", b"sequence,label\nACD,1\n"),
+        )
+
+        class CanceledColabOutput:
+            @staticmethod
+            def eval_js(javascript):
+                if "_uploadFiles(" in javascript:
+                    return {"action": "complete"}
+                return None
+
+        fake_colab.output = CanceledColabOutput()
+        with patch.dict(
+            sys.modules,
+            {"google": fake_google, "google.colab": fake_colab},
+        ):
+            self.assertIsNone(upload_field._upload_inline())
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            class LegacyWorkflow:
+                upload_dir = Path(temporary_dir)
+
+                @staticmethod
+                def maybe_upload_path(current_path, upload_enabled):
+                    return "/tmp/legacy-upload.file"
+
+            legacy_ui = module.ColabProSSTUI(LegacyWorkflow())
+            legacy_field = module._UploadField(
+                legacy_ui, "Training CSV:", "Choose CSV"
+            )
+            fake_colab.output = FakeColabOutput()
+            with patch.dict(
+                sys.modules,
+                {"google": fake_google, "google.colab": fake_colab},
+            ):
+                legacy_path = Path(legacy_field._upload_inline())
+
+            self.assertEqual(legacy_path, Path(temporary_dir) / "training.csv")
+            self.assertEqual(
+                legacy_path.read_bytes(), b"sequence,label\nACD,1\n"
+            )
 
 
 if __name__ == "__main__":

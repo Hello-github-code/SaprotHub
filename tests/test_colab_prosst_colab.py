@@ -370,6 +370,35 @@ class ColabProSSTBootstrapTest(unittest.TestCase):
 
 
 class ColabProSSTStructureRuntimeTest(unittest.TestCase):
+    def test_official_model_specs_cover_every_quantized_checkpoint(self):
+        from saprot.model.prosst.specs import (
+            DEFAULT_PROSST_MODEL,
+            PROSST_MODEL_SPECS,
+            get_prosst_model_spec,
+            resolve_structure_vocab_size,
+        )
+
+        self.assertEqual(
+            [spec.structure_vocab_size for spec in PROSST_MODEL_SPECS],
+            [20, 128, 512, 1024, 2048, 4096],
+        )
+        self.assertEqual(
+            [spec.encoded_structure_vocab_size for spec in PROSST_MODEL_SPECS],
+            [23, 131, 515, 1027, 2051, 4099],
+        )
+        self.assertEqual(DEFAULT_PROSST_MODEL.model_path, "AI4Protein/ProSST-2048")
+        self.assertEqual(
+            get_prosst_model_spec("AI4Protein/ProSST-4096").structure_vocab_size,
+            4096,
+        )
+        self.assertEqual(
+            resolve_structure_vocab_size("AI4Protein/ProSST-20"), 20
+        )
+        with self.assertRaisesRegex(ValueError, "requires structure_vocab_size=20"):
+            resolve_structure_vocab_size("AI4Protein/ProSST-20", 2048)
+        with self.assertRaisesRegex(ValueError, "requires an explicit"):
+            resolve_structure_vocab_size("local/custom-model")
+
     def test_threadpool_guard_ignores_only_deleted_library_paths(self):
         import threadpoolctl
 

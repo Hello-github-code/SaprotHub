@@ -61,6 +61,21 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("prosst/structure/static/AE.pt", source)
         self.assertIn("prosst/structure/static/2048.joblib", source)
 
+    def test_notebook_anchors_and_refreshes_colab_source_checkout(self):
+        notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
+        source = "".join(notebook["cells"][1]["source"])
+
+        self.assertIn("Path('/content')", source)
+        self.assertIn("os.chdir(ROOT)", source)
+        self.assertNotIn("ROOT = Path(os.getcwd())", source)
+        self.assertIn("def update_saprothub():", source)
+        self.assertIn("'fetch', '--depth', '50'", source)
+        self.assertIn("'.SaprotHub-installing'", source)
+        self.assertIn("def project_revision():", source)
+        self.assertIn("ColabProSST source:", source)
+        self.assertIn("module_name.startswith('prosst.')", source)
+        self.assertNotIn("load_colabprosst_workflow", source)
+
     def test_home_menu_matches_colabsaprot_top_level_actions(self):
         source = UI_PATH.read_text(encoding="utf-8")
         home_source = source.split("def _home_page(self):", 1)[1].split(

@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NOTEBOOK_PATH = REPO_ROOT / "colab" / "ColabProSST.ipynb"
+COLABSAPROT_PATH = REPO_ROOT / "colab" / "SaprotHub_v2.ipynb"
 UI_PATH = REPO_ROOT / "saprot" / "utils" / "colab_prosst_ui.py"
 README_PATH = REPO_ROOT / "README.md"
 
@@ -119,6 +120,46 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertNotIn("Download CSV templates", home_source)
         self.assertIn("Convert protein structure to ProSST tokens", prediction_source)
         self.assertIn("Download CSV templates", prediction_source)
+
+    def test_shared_interface_copy_is_kept_in_sync_with_colabsaprot(self):
+        reference_notebook = json.loads(
+            COLABSAPROT_PATH.read_text(encoding="utf-8")
+        )
+        reference = "".join(reference_notebook["cells"][2]["source"])
+        prosst = UI_PATH.read_text(encoding="utf-8")
+        shared_copy = [
+            "I want to train my own model",
+            "I want to use existing models to make prediction",
+            "I want to share my model publicly",
+            "Please finish the setting of your training task",
+            "Task setting:",
+            "Name your task:",
+            "Task type:",
+            "Number of categories:",
+            "Model setting:",
+            "Base model:",
+            "Dataset setting:",
+            "Training hyper-parameters:",
+            "Batch size:",
+            "Epoch:",
+            "Learning rate:",
+            "Start training",
+            "Protein property prediction",
+            "Choose the prediction task:",
+            "Start prediction",
+            "Mutational effect prediction",
+            "Go back",
+            "Refresh",
+            "Stop",
+        ]
+
+        for copy in shared_copy:
+            with self.subTest(copy=copy):
+                self.assertIn(copy, reference)
+                self.assertIn(copy, prosst)
+
+        self.assertIn("Convert protein structure to ProSST tokens", prosst)
+        self.assertIn("Structure input:", prosst)
 
     def test_task_pages_require_an_explicit_structure_input_mode(self):
         source = UI_PATH.read_text(encoding="utf-8")

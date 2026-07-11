@@ -75,6 +75,9 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("CSV already contains `structure_tokens`", introduction)
         self.assertIn("CSV does not contain `structure_tokens`", introduction)
         self.assertIn("Reuse latest structure conversion", introduction)
+        for vocab_size in [20, 128, 512, 1024, 2048, 4096]:
+            with self.subTest(vocab_size=vocab_size):
+                self.assertIn(f"ProSST-{vocab_size}", introduction)
 
         tutorial = "".join(notebook["cells"][1]["source"])
         self.assertIn("How to start", tutorial)
@@ -104,7 +107,13 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("saprot/utils/colab_prosst_ui.py", source)
         self.assertIn("prosst/structure/get_sst_seq.py", source)
         self.assertIn("prosst/structure/static/AE.pt", source)
-        self.assertIn("prosst/structure/static/2048.joblib", source)
+        for vocab_size in [20, 128, 512, 1024, 2048, 4096]:
+            with self.subTest(vocab_size=vocab_size):
+                self.assertIn(
+                    f"prosst/structure/static/{vocab_size}.joblib",
+                    source,
+                )
+        self.assertNotIn("prosst/structure/static/64.joblib", source)
 
     def test_notebook_anchors_and_refreshes_colab_source_checkout(self):
         notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
@@ -616,6 +625,34 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         workflow.save_uploaded_content(invalid_name, b"")
 
+    def test_csv_templates_follow_the_selected_model_vocabulary(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+
+            workflow.create_csv_templates(
+                template_dir=str(root / "templates"),
+                structure_vocab_size=20,
+            )
+
+            token_template = self.pd.read_csv(
+                root / "templates" / "prosst_classification_template.csv"
+            )
+            path_template = self.pd.read_csv(
+                root / "templates" / "prosst_classification_pdb_template.csv"
+            )
+            self.assertEqual(
+                token_template["structure_vocab_size"].unique().tolist(),
+                [20],
+            )
+            self.assertNotIn("structure_vocab_size", path_template.columns)
+
     def test_reusing_latest_conversion_overrides_other_structure_sources(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
@@ -940,7 +977,7 @@ class ColabProSSTInferenceTest(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "incompatible"):
-                self.prediction._validate_checkpoint_compatibility(
+                self.prediction.validate_checkpoint_compatibility(
                     str(checkpoint_path),
                     "classification",
                     "AI4Protein/ProSST-4096",
@@ -994,8 +1031,25 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         fake_saprot.__path__ = []
         fake_utils = types.ModuleType("saprot.utils")
         fake_utils.__path__ = []
-        fake_workflow = types.ModuleType("saprot.utils.colab_prosst_workflow")
-        fake_workflow.MODEL_PROSST_2048 = "AI4Protein/ProSST-2048"
+        fake_model = types.ModuleType("saprot.model")
+        fake_model.__path__ = []
+        fake_prosst = types.ModuleType("saprot.model.prosst")
+        fake_prosst.__path__ = []
+        fake_specs = types.ModuleType("saprot.model.prosst.specs")
+        fake_specs.PROSST_MODEL_SPECS = tuple(
+            types.SimpleNamespace(
+                model_path=f"AI4Protein/ProSST-{vocab_size}",
+                structure_vocab_size=vocab_size,
+                display_name=f"Official ProSST ({vocab_size})",
+            )
+            for vocab_size in [20, 128, 512, 1024, 2048, 4096]
+        )
+        fake_specs.DEFAULT_PROSST_MODEL = fake_specs.PROSST_MODEL_SPECS[4]
+        fake_specs.get_prosst_model_spec = lambda model_path: next(
+            spec
+            for spec in fake_specs.PROSST_MODEL_SPECS
+            if spec.model_path == model_path
+        )
 
         module_name = "_colab_prosst_ui_widget_test"
         spec = importlib.util.spec_from_file_location(module_name, UI_PATH)
@@ -1003,7 +1057,9 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         replacements = {
             "saprot": fake_saprot,
             "saprot.utils": fake_utils,
-            "saprot.utils.colab_prosst_workflow": fake_workflow,
+            "saprot.model": fake_model,
+            "saprot.model.prosst": fake_prosst,
+            "saprot.model.prosst.specs": fake_specs,
             module_name: module,
         }
 
@@ -1034,6 +1090,17 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         self.assertEqual(input_guide.layout.overflow, "visible")
         self.assertIsNone(input_guide.layout.height)
         self.assertIn("CSV contains structure_tokens", input_guide.value)
+
+        model_dropdown = ui._model_dropdown()
+        self.assertFalse(model_dropdown.disabled)
+        self.assertEqual(
+            [value for _label, value in model_dropdown.options],
+            [spec.model_path for spec in fake_specs.PROSST_MODEL_SPECS],
+        )
+        self.assertEqual(
+            model_dropdown.value,
+            "AI4Protein/ProSST-2048",
+        )
 
         structure_input = module._StructureInput(ui)
         self.assertEqual(structure_input.mode.value, structure_input.TOKENS)

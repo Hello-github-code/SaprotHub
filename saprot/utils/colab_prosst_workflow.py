@@ -13,7 +13,10 @@ from saprot.data.pdb2prosst import (
     serialize_structure_tokens,
 )
 from saprot.scripts.mutation_zeroshot_prosst import score_mutants
-from saprot.scripts.predict_prosst import predict_csv
+from saprot.scripts.predict_prosst import (
+    predict_csv,
+    validate_checkpoint_compatibility,
+)
 from saprot.model.prosst.specs import (
     DEFAULT_PROSST_MODEL,
     MODEL_PROSST_2048,
@@ -138,6 +141,7 @@ class ColabProSSTWorkflow:
         self,
         template_dir: str = "/content/prosst_templates",
         download: bool = False,
+        structure_vocab_size: int = 2048,
     ) -> Path:
         template_home = Path(template_dir)
         template_home.mkdir(parents=True, exist_ok=True)
@@ -146,8 +150,18 @@ class ColabProSSTWorkflow:
 
         pd.DataFrame(
             [
-                {"sequence": "ACD", "mutant": "D3A", "structure_tokens": "0 1 2"},
-                {"sequence": "ACDE", "mutant": "D3A:E4A", "structure_tokens": "0 1 2 3"},
+                {
+                    "sequence": "ACD",
+                    "mutant": "D3A",
+                    "structure_tokens": "0 1 2",
+                    "structure_vocab_size": structure_vocab_size,
+                },
+                {
+                    "sequence": "ACDE",
+                    "mutant": "D3A:E4A",
+                    "structure_tokens": "0 1 2 3",
+                    "structure_vocab_size": structure_vocab_size,
+                },
             ]
         ).to_csv(template_home / "prosst_zero_shot_template.csv", index=False)
 
@@ -164,9 +178,27 @@ class ColabProSSTWorkflow:
 
         pd.DataFrame(
             [
-                {"sequence": "ACD", "label": 1, "stage": "train", "structure_tokens": "0 1 2"},
-                {"sequence": "ACE", "label": 0, "stage": "valid", "structure_tokens": "0 1 3"},
-                {"sequence": "ACF", "label": 1, "stage": "test", "structure_tokens": "0 1 4"},
+                {
+                    "sequence": "ACD",
+                    "label": 1,
+                    "stage": "train",
+                    "structure_tokens": "0 1 2",
+                    "structure_vocab_size": structure_vocab_size,
+                },
+                {
+                    "sequence": "ACE",
+                    "label": 0,
+                    "stage": "valid",
+                    "structure_tokens": "0 1 3",
+                    "structure_vocab_size": structure_vocab_size,
+                },
+                {
+                    "sequence": "ACF",
+                    "label": 1,
+                    "stage": "test",
+                    "structure_tokens": "0 1 4",
+                    "structure_vocab_size": structure_vocab_size,
+                },
             ]
         ).to_csv(template_home / "prosst_classification_template.csv", index=False)
 
@@ -198,9 +230,27 @@ class ColabProSSTWorkflow:
 
         pd.DataFrame(
             [
-                {"sequence": "ACD", "label": 0.5, "stage": "train", "structure_tokens": "0 1 2"},
-                {"sequence": "ACE", "label": 0.2, "stage": "valid", "structure_tokens": "0 1 3"},
-                {"sequence": "ACF", "label": 0.8, "stage": "test", "structure_tokens": "0 1 4"},
+                {
+                    "sequence": "ACD",
+                    "label": 0.5,
+                    "stage": "train",
+                    "structure_tokens": "0 1 2",
+                    "structure_vocab_size": structure_vocab_size,
+                },
+                {
+                    "sequence": "ACE",
+                    "label": 0.2,
+                    "stage": "valid",
+                    "structure_tokens": "0 1 3",
+                    "structure_vocab_size": structure_vocab_size,
+                },
+                {
+                    "sequence": "ACF",
+                    "label": 0.8,
+                    "stage": "test",
+                    "structure_tokens": "0 1 4",
+                    "structure_vocab_size": structure_vocab_size,
+                },
             ]
         ).to_csv(template_home / "prosst_regression_template.csv", index=False)
 
@@ -232,8 +282,16 @@ class ColabProSSTWorkflow:
 
         pd.DataFrame(
             [
-                {"sequence": "ACD", "structure_tokens": "0 1 2"},
-                {"sequence": "ACE", "structure_tokens": "0 1 3"},
+                {
+                    "sequence": "ACD",
+                    "structure_tokens": "0 1 2",
+                    "structure_vocab_size": structure_vocab_size,
+                },
+                {
+                    "sequence": "ACE",
+                    "structure_tokens": "0 1 3",
+                    "structure_vocab_size": structure_vocab_size,
+                },
             ]
         ).to_csv(template_home / "prosst_prediction_template.csv", index=False)
 
@@ -703,6 +761,12 @@ class ColabProSSTWorkflow:
         checkpoint = Path(checkpoint_path)
         if not checkpoint.exists():
             raise FileNotFoundError(f"Checkpoint does not exist: {checkpoint}")
+        validate_checkpoint_compatibility(
+            str(checkpoint),
+            task_type,
+            model_path,
+            structure_vocab_size,
+        )
 
         if run_login:
             from huggingface_hub import notebook_login
@@ -754,6 +818,7 @@ ColabProSST uses amino-acid tokenizer `input_ids` together with ProSST structure
 
 - Task type: `{task_type}`
 - Base model: `{model_path}`
+- Structure vocabulary: `{structure_vocab_size}`
 
 Use `saprot/scripts/predict_prosst.py` from the ColabProSST branch to run prediction with this checkpoint.
 """

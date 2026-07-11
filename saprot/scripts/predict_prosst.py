@@ -162,7 +162,7 @@ def _load_model(
     return model
 
 
-def _validate_checkpoint_compatibility(
+def validate_checkpoint_compatibility(
     checkpoint_path: str,
     task_type: str,
     model_path: str,
@@ -229,7 +229,7 @@ def predict_csv(
     checkpoint = Path(checkpoint_path)
     if not checkpoint.exists():
         raise FileNotFoundError(f"ProSST checkpoint does not exist: {checkpoint}")
-    _validate_checkpoint_compatibility(
+    validate_checkpoint_compatibility(
         str(checkpoint),
         task_type,
         model_path,

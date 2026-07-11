@@ -9,7 +9,11 @@ import traceback
 import uuid
 from pathlib import Path
 
-from saprot.utils.colab_prosst_workflow import MODEL_PROSST_2048
+from saprot.model.prosst.specs import (
+    DEFAULT_PROSST_MODEL,
+    PROSST_MODEL_SPECS,
+    get_prosst_model_spec,
+)
 
 
 class _UploadField:
@@ -193,7 +197,7 @@ class _StructureInput:
             return ""
         return self.zip_upload.value
 
-    def validate(self, csv_path):
+    def validate(self, csv_path, structure_vocab_size=None):
         path = Path(csv_path)
         if not path.is_file():
             raise FileNotFoundError(f"Input CSV does not exist: {path}")
@@ -225,6 +229,21 @@ class _StructureInput:
                 "No structure conversion is available in this Colab session. "
                 "Run `Convert protein structure to ProSST tokens` first."
             )
+        if self.mode.value == self.REUSE and structure_vocab_size is not None:
+            last_structure = self.ui.workflow.last_structure
+            last_vocab_size = int(
+                last_structure.get(
+                    "structure_vocab_size",
+                    DEFAULT_PROSST_MODEL.structure_vocab_size,
+                )
+            )
+            if last_vocab_size != int(structure_vocab_size):
+                raise ValueError(
+                    "The latest structure conversion used vocabulary "
+                    f"{last_vocab_size}, but the selected model requires "
+                    f"{structure_vocab_size}. Convert the structure again with "
+                    "the selected model."
+                )
 
     def _update(self, change):
         mode = change["new"]
@@ -244,8 +263,15 @@ class _StructureInput:
                 )
             else:
                 sequence_length = len(last_structure.get("sequence", ""))
+                vocab_size = int(
+                    last_structure.get(
+                        "structure_vocab_size",
+                        DEFAULT_PROSST_MODEL.structure_vocab_size,
+                    )
+                )
                 availability = (
-                    f"<br>Latest conversion available: {sequence_length} residues."
+                    f"<br>Latest conversion available: {sequence_length} "
+                    f"residues, ProSST-{vocab_size}. Select the same base model."
                 )
             self.hint.value = (
                 "First run <b>Convert protein structure to ProSST tokens</b>. "
@@ -286,6 +312,7 @@ class ColabProSSTUI:
         self.navigation_history = []
         self.active_thread = None
         self.latest_checkpoint = ""
+        self.latest_model_path = DEFAULT_PROSST_MODEL.model_path
         self._polling = False
         self._build_system_widgets()
 
@@ -311,12 +338,17 @@ class ColabProSSTUI:
             ),
         )
 
-    def _model_dropdown(self):
+    def _model_dropdown(self, value=None):
+        selected = value or self.latest_model_path
+        if selected not in {spec.model_path for spec in PROSST_MODEL_SPECS}:
+            selected = DEFAULT_PROSST_MODEL.model_path
         return self.widgets.Dropdown(
-            options=[("Official ProSST (2048)", MODEL_PROSST_2048)],
-            value=MODEL_PROSST_2048,
+            options=[
+                (spec.display_name, spec.model_path)
+                for spec in PROSST_MODEL_SPECS
+            ],
+            value=selected,
             description="Base model:",
-            disabled=True,
             layout=self.widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
         )
 
@@ -371,7 +403,9 @@ class ColabProSSTUI:
             "structure, return to the task, and select <b>Reuse latest structure "
             "conversion</b>. Every CSV row must contain that same sequence.</li>"
             "<li><b>CSV contains structure_tokens:</b> upload only the CSV. This "
-            "is the best option for repeated use and future Colab sessions.</li>"
+            "is the best option for repeated use and future Colab sessions. "
+            "Keep the conversion CSV's <code>structure_vocab_size</code> column "
+            "and select the same ProSST model.</li>"
             "<li><b>CSV contains structure file paths:</b> include "
             "<code>pdb_path</code> or <code>structure_path</code>, then upload a "
             "ZIP when those paths are relative filenames.</li>"
@@ -497,11 +531,17 @@ class ColabProSSTUI:
             with self.system_status:
                 print("Task interrupted by user.")
 
-    def _download_templates(self, button):
+    def _download_templates(self, button, model_path=None):
         output = self.system_status
 
         def action():
-            self.workflow.create_csv_templates(download=True)
+            spec = get_prosst_model_spec(
+                model_path or self.latest_model_path
+            )
+            self.workflow.create_csv_templates(
+                download=True,
+                structure_vocab_size=spec.structure_vocab_size,
+            )
 
         self._start_task(button, output, action)
 
@@ -627,7 +667,11 @@ class ColabProSSTUI:
                 raise ValueError(
                     "Task name must be a non-empty file-name-safe value."
                 )
-            structure_input.validate(csv_input.value)
+            model_spec = get_prosst_model_spec(model.value)
+            structure_input.validate(
+                csv_input.value,
+                structure_vocab_size=model_spec.structure_vocab_size,
+            )
             print("Start training...")
             result = self.workflow.train_downstream(
                 task_type=task_type.value,
@@ -640,11 +684,13 @@ class ColabProSSTUI:
                 batch_size=batch_size.value,
                 learning_rate=learning_rate.value,
                 model_path=model.value,
+                structure_vocab_size=model_spec.structure_vocab_size,
                 freeze_backbone=freeze_backbone.value,
                 gradient_checkpointing=gradient_checkpointing.value,
                 download=download.value,
             )
             self.latest_checkpoint = result["checkpoint_path"]
+            self.latest_model_path = result["model_path"]
             print("Training finished.")
             print("Model checkpoint:", result["checkpoint_path"])
             print("Test predictions:", result["test_result_csv"])
@@ -664,7 +710,9 @@ class ColabProSSTUI:
             finish_hint.layout.display = None
 
         task_type.observe(update_task, names="value")
-        template_button.on_click(self._download_templates)
+        template_button.on_click(
+            lambda button: self._download_templates(button, model.value)
+        )
         advanced_button.on_click(toggle_advanced)
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, train)
@@ -794,7 +842,11 @@ class ColabProSSTUI:
                 raise ValueError("Upload a model checkpoint or enter its path.")
             if not csv_input.value:
                 raise ValueError("Upload a prediction CSV or enter its path.")
-            structure_input.validate(csv_input.value)
+            model_spec = get_prosst_model_spec(model.value)
+            structure_input.validate(
+                csv_input.value,
+                structure_vocab_size=model_spec.structure_vocab_size,
+            )
             print("Start prediction...")
             result = self.workflow.predict_downstream(
                 task_type=task_type.value,
@@ -805,8 +857,10 @@ class ColabProSSTUI:
                 num_labels=num_labels.value,
                 batch_size=batch_size.value,
                 model_path=model.value,
+                structure_vocab_size=model_spec.structure_vocab_size,
                 download=download.value,
             )
+            self.latest_model_path = model.value
             self.display(result.head())
 
         task_type.observe(update_task, names="value")
@@ -853,15 +907,21 @@ class ColabProSSTUI:
         def predict():
             if not csv_input.value:
                 raise ValueError("Upload a mutation CSV or enter its path.")
-            structure_input.validate(csv_input.value)
+            model_spec = get_prosst_model_spec(model.value)
+            structure_input.validate(
+                csv_input.value,
+                structure_vocab_size=model_spec.structure_vocab_size,
+            )
             print("Start mutational effect prediction...")
             result = self.workflow.run_zero_shot(
                 input_csv=csv_input.value,
                 use_last_structure_tokens=structure_input.reuse_latest,
                 structure_zip=structure_input.structure_zip,
                 model_path=model.value,
+                structure_vocab_size=model_spec.structure_vocab_size,
                 download=download.value,
             )
+            self.latest_model_path = model.value
             self.display(result.head())
 
         start_button.on_click(
@@ -887,6 +947,7 @@ class ColabProSSTUI:
     def _structure_page(self):
         self.current_page = self._structure_page
         widgets = self.widgets
+        model = self._model_dropdown()
         structure = _UploadField(
             self,
             "Structure file:",
@@ -898,9 +959,8 @@ class ColabProSSTUI:
             description="Chain:",
             layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
         )
-        vocab = widgets.Dropdown(
-            options=[2048],
-            value=2048,
+        vocab = widgets.IntText(
+            value=get_prosst_model_spec(model.value).structure_vocab_size,
             description="Structure vocab:",
             disabled=True,
             style={"description_width": "initial"},
@@ -921,6 +981,11 @@ class ColabProSSTUI:
             display="none",
         )
 
+        def update_model(change):
+            vocab.value = get_prosst_model_spec(
+                change["new"]
+            ).structure_vocab_size
+
         def convert():
             if not structure.value:
                 raise ValueError("Upload a PDB/mmCIF file or enter its path.")
@@ -931,6 +996,7 @@ class ColabProSSTUI:
                 structure_vocab_size=vocab.value,
                 download=download.value,
             )
+            self.latest_model_path = model.value
             self.display(result)
             next_steps.value = (
                 "<h3>Use these tokens in your next task</h3>"
@@ -938,20 +1004,27 @@ class ColabProSSTUI:
                 "<li>Click <b>Go back</b> below and open training or the "
                 "prediction task you need.</li>"
                 "<li>Upload a CSV containing the same amino-acid sequence.</li>"
+                f"<li>Keep <b>{get_prosst_model_spec(model.value).display_name}</b> "
+                "selected. Structure tokens cannot be reused by a different "
+                "ProSST vocabulary.</li>"
                 "<li>Select <b>Reuse latest structure conversion</b>. Do not "
                 "upload a Structure ZIP.</li>"
                 "</ol>"
                 "The shortcut lasts only for this running Colab session. For a "
                 "future session, keep the downloaded conversion CSV and place "
-                "its <code>structure_tokens</code> in your task CSV."
+                "its <code>structure_tokens</code> and "
+                "<code>structure_vocab_size</code> in your task CSV."
             )
             next_steps.layout.display = None
 
+        model.observe(update_model, names="value")
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, convert)
         )
         self.display(
             self._heading("Convert protein structure to ProSST tokens"),
+            self._heading("Model setting:", level=3),
+            model,
             self._heading("Structure setting:", level=3),
             *structure.items,
             chain,
@@ -979,6 +1052,7 @@ class ColabProSSTUI:
             "Path to a trained ColabProSST .pt checkpoint",
         )
         checkpoint.value = self.latest_checkpoint
+        model = self._model_dropdown()
         task_type = self._task_dropdown()
         num_labels = self._num_labels()
         private = widgets.Checkbox(
@@ -1013,11 +1087,14 @@ class ColabProSSTUI:
             if not checkpoint.value:
                 raise ValueError("Upload a model checkpoint or enter its path.")
             print("Uploading model to Hugging Face...")
+            model_spec = get_prosst_model_spec(model.value)
             package = self.workflow.upload_checkpoint_to_hf(
                 repo_id=repo_id.value,
                 checkpoint_path=checkpoint.value,
                 task_type=task_type.value,
                 num_labels=num_labels.value,
+                model_path=model.value,
+                structure_vocab_size=model_spec.structure_vocab_size,
                 private=private.value,
                 run_login=login.value,
                 title=title.value,
@@ -1033,6 +1110,7 @@ class ColabProSSTUI:
             self._heading("Share your ColabProSST model"),
             repo_id,
             *checkpoint.items,
+            model,
             task_type,
             num_labels,
             private,

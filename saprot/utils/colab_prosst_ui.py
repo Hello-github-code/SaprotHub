@@ -982,6 +982,17 @@ class ColabProSSTUI:
             self._heading("Mutational effect prediction"),
             self._heading("Model setting:", level=3),
             model,
+            self._html(
+                "<b>Zero-shot model note:</b> This task calculates "
+                "<code>log P(mutant) - log P(wild type)</code> from an official "
+                "pretrained ProSST masked-language model. Protein-level "
+                "classification and regression checkpoints do not provide this "
+                "mutation score; use them under <b>Protein property "
+                "prediction</b> instead.",
+                width="100%",
+                max_width=self.GUIDE_WIDTH,
+                overflow="visible",
+            ),
             self._heading("Mutation data:", level=3),
             self._html(
                 "The CSV must contain <code>sequence</code> and "

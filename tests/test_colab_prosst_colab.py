@@ -228,6 +228,13 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("is selected automatically in this session", training_page)
         self.assertIn("self._task_intro(change[\"new\"])", training_page)
 
+        mutation_page = source.split("def _mutation_page(self):", 1)[1].split(
+            "def _structure_page(self):", 1
+        )[0]
+        self.assertIn("Zero-shot model note", mutation_page)
+        self.assertIn("log P(mutant) - log P(wild type)", mutation_page)
+        self.assertIn("Protein property", mutation_page)
+
     def test_background_tasks_never_clear_the_whole_cell(self):
         source = UI_PATH.read_text(encoding="utf-8")
         start_task_source = source.split("def _start_task(self,", 1)[1].split(

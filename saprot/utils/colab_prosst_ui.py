@@ -1547,6 +1547,23 @@ class ColabProSSTUI:
             layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
         )
         model = self._model_dropdown()
+        embedding_model_source = widgets.ToggleButtons(
+            options=[
+                ("Official ProSST", "official"),
+                ("Fine-tuned / community artifact", "artifact"),
+            ],
+            value="official",
+            description="Embedding model:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
+        )
+        embedding_artifact = _ModelArtifactField(
+            self,
+            "Model or adapter:",
+            "Path to a .pt checkpoint, LoRA adapter directory, or LoRA ZIP",
+        )
+        embedding_artifact.value = self.latest_checkpoint
+        embedding_artifact.set_visible(False)
         csv_input = _UploadField(
             self,
             "Protein CSV:",
@@ -1576,9 +1593,29 @@ class ColabProSSTUI:
         start_button = self._button("Start embedding extraction", style="info")
         output = self._output()
 
+        def update_embedding_source(change):
+            embedding_artifact.set_visible(change["new"] == "artifact")
+
+        def apply_embedding_artifact(metadata):
+            model_values = {value for _label, value in model.options}
+            if metadata["model_path"] not in model_values:
+                raise ValueError(
+                    "Embedding artifacts must use an official ProSST family "
+                    f"base model; found {metadata['model_path']}."
+                )
+            model.value = metadata["model_path"]
+            self.latest_checkpoint = metadata["artifact_path"]
+            self.latest_model_path = metadata["model_path"]
+
         def extract():
             if not csv_input.value:
                 raise ValueError("Upload a protein CSV or enter its path.")
+            use_artifact = embedding_model_source.value == "artifact"
+            if use_artifact and not embedding_artifact.value:
+                raise ValueError(
+                    "Upload a fine-tuned model/adapter, enter its path, or load "
+                    "a Hugging Face repository."
+                )
             model_spec = get_prosst_model_spec(model.value)
             structure_input.validate(
                 csv_input.value,
@@ -1594,6 +1631,9 @@ class ColabProSSTUI:
                 level=level.value,
                 batch_size=batch_size.value,
                 max_length=max_length.value,
+                checkpoint_path=(
+                    embedding_artifact.value if use_artifact else ""
+                ),
                 download=download.value,
             )
             self.latest_model_path = model.value
@@ -1610,6 +1650,8 @@ class ColabProSSTUI:
                 print("residue embedding shapes:", residue_shapes)
             print("embedding package:", result["archive_path"])
 
+        embedding_artifact.on_loaded(apply_embedding_artifact)
+        embedding_model_source.observe(update_embedding_source, names="value")
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, extract)
         )
@@ -1624,6 +1666,8 @@ class ColabProSSTUI:
             self._heading("Embedding setting:", level=3),
             level,
             model,
+            embedding_model_source,
+            *embedding_artifact.items,
             self._heading("Input proteins:", level=3),
             *csv_input.items,
             *structure_input.items,

@@ -1129,6 +1129,7 @@ class ColabProSSTWorkflow:
         max_length: int = 2046,
         output_pt: Optional[str] = None,
         output_index_csv: Optional[str] = None,
+        checkpoint_path: str = "",
         download: bool = True,
     ) -> dict:
         level = str(level).strip().lower()
@@ -1140,6 +1141,24 @@ class ColabProSSTWorkflow:
             model_path,
             structure_vocab_size,
         )
+        checkpoint_path = str(checkpoint_path or "").strip()
+        artifact_metadata = None
+        if checkpoint_path:
+            artifact_metadata = self.inspect_model_artifact(checkpoint_path)
+            checkpoint_path = artifact_metadata["artifact_path"]
+            if artifact_metadata["model_path"] != model_path:
+                raise ValueError(
+                    "Embedding artifact base model does not match the selected "
+                    f"model: {artifact_metadata['model_path']} != {model_path}."
+                )
+            if (
+                artifact_metadata["structure_vocab_size"]
+                != structure_vocab_size
+            ):
+                raise ValueError(
+                    "Embedding artifact structure vocabulary does not match "
+                    "the selected model."
+                )
         input_csv = self._prepare_input_csv(
             input_csv,
             upload_csv,
@@ -1173,6 +1192,15 @@ class ColabProSSTWorkflow:
             batch_size=batch_size,
             max_length=max_length,
             structure_base_dir=structure_base_dir,
+            checkpoint_path=checkpoint_path,
+            checkpoint_task_type=(
+                artifact_metadata["task_type"] if artifact_metadata else None
+            ),
+            checkpoint_num_labels=(
+                artifact_metadata.get("num_labels") or 2
+                if artifact_metadata
+                else 2
+            ),
         )
 
         archive_path = self.output_dir / f"prosst_{level}_embeddings.zip"

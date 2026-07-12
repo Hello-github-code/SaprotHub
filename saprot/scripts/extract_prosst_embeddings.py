@@ -24,6 +24,10 @@ try:
         structure_entry_from_row,
     )
     from saprot.model.prosst.specs import resolve_structure_vocab_size
+    from saprot.scripts.predict_prosst import (
+        load_prosst_downstream_model,
+        validate_checkpoint_compatibility,
+    )
 except ImportError:
     from data.pdb2prosst import (
         get_structure_tokens_from_entry,
@@ -35,6 +39,10 @@ except ImportError:
         structure_entry_from_row,
     )
     from model.prosst.specs import resolve_structure_vocab_size
+    from scripts.predict_prosst import (
+        load_prosst_downstream_model,
+        validate_checkpoint_compatibility,
+    )
 
 
 EMBEDDING_LEVELS = {"protein", "residue", "both"}
@@ -54,6 +62,9 @@ def extract_embeddings(
     layer_index: int = -1,
     device: str = None,
     structure_base_dir: str = None,
+    checkpoint_path: str = "",
+    checkpoint_task_type: str = None,
+    checkpoint_num_labels: int = 2,
 ) -> dict:
     level = str(level).strip().lower()
     if level not in EMBEDDING_LEVELS:
@@ -117,12 +128,41 @@ def extract_embeddings(
         model_path,
         trust_remote_code=True,
     )
-    model = AutoModelForMaskedLM.from_pretrained(
-        model_path,
-        trust_remote_code=True,
-    )
-    model = model.to(target_device)
-    model.eval()
+    checkpoint_path = str(checkpoint_path or "").strip()
+    if checkpoint_path:
+        if not checkpoint_task_type:
+            raise ValueError(
+                "checkpoint_task_type is required when extracting embeddings "
+                "from a downstream checkpoint."
+            )
+        if layer_index != -1:
+            raise ValueError(
+                "Fine-tuned checkpoint embedding extraction currently uses "
+                "the final hidden layer; set layer_index=-1."
+            )
+        validate_checkpoint_compatibility(
+            checkpoint_path,
+            checkpoint_task_type,
+            model_path,
+            structure_vocab_size,
+            checkpoint_num_labels,
+        )
+        model = load_prosst_downstream_model(
+            task_type=checkpoint_task_type,
+            model_path=model_path,
+            checkpoint_path=checkpoint_path,
+            num_labels=checkpoint_num_labels,
+            structure_vocab_size=structure_vocab_size,
+            device=target_device,
+            load_pretrained=False,
+        )
+    else:
+        model = AutoModelForMaskedLM.from_pretrained(
+            model_path,
+            trust_remote_code=True,
+        )
+        model = model.to(target_device)
+        model.eval()
 
     keep_protein = level in {"protein", "both"}
     keep_residue = level in {"residue", "both"}
@@ -141,26 +181,30 @@ def extract_embeddings(
             structure_vocab_size=structure_vocab_size,
             device=target_device,
         )
-        outputs = model(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            ss_input_ids=inputs["ss_input_ids"],
-            output_hidden_states=True,
-            return_dict=True,
-        )
-        hidden_states = getattr(outputs, "hidden_states", None)
-        if hidden_states is None:
-            raise RuntimeError(
-                "The selected ProSST model did not return hidden states."
+        if checkpoint_path:
+            batch_embeddings = model.get_token_representations(inputs)
+            resolved_layer_index = -1
+        else:
+            outputs = model(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                ss_input_ids=inputs["ss_input_ids"],
+                output_hidden_states=True,
+                return_dict=True,
             )
-        try:
-            batch_embeddings = hidden_states[layer_index]
-        except IndexError as exc:
-            raise ValueError(
-                f"layer_index={layer_index} is outside the model's "
-                f"{len(hidden_states)} available hidden-state layers."
-            ) from exc
-        resolved_layer_index = layer_index % len(hidden_states)
+            hidden_states = getattr(outputs, "hidden_states", None)
+            if hidden_states is None:
+                raise RuntimeError(
+                    "The selected ProSST model did not return hidden states."
+                )
+            try:
+                batch_embeddings = hidden_states[layer_index]
+            except IndexError as exc:
+                raise ValueError(
+                    f"layer_index={layer_index} is outside the model's "
+                    f"{len(hidden_states)} available hidden-state layers."
+                ) from exc
+            resolved_layer_index = layer_index % len(hidden_states)
 
         for local_index, sequence in enumerate(batch_sequences):
             encoded_length = int(
@@ -196,6 +240,8 @@ def extract_embeddings(
         "layer_index": int(resolved_layer_index),
         "hidden_size": int(batch_embeddings.shape[-1]),
         "dtype": "float32",
+        "checkpoint_path": checkpoint_path,
+        "checkpoint_task_type": checkpoint_task_type if checkpoint_path else None,
         "sequences": sequences,
         "sequence_lengths": torch.tensor(
             [len(sequence) for sequence in sequences],
@@ -247,6 +293,9 @@ def get_args():
     parser.add_argument("--layer_index", type=int, default=-1)
     parser.add_argument("--device", default=None)
     parser.add_argument("--structure_base_dir", default=None)
+    parser.add_argument("--checkpoint_path", default="")
+    parser.add_argument("--checkpoint_task_type", default=None)
+    parser.add_argument("--checkpoint_num_labels", type=int, default=2)
     return parser.parse_args()
 
 
@@ -265,6 +314,9 @@ def main():
         layer_index=args.layer_index,
         device=args.device,
         structure_base_dir=args.structure_base_dir,
+        checkpoint_path=args.checkpoint_path,
+        checkpoint_task_type=args.checkpoint_task_type,
+        checkpoint_num_labels=args.checkpoint_num_labels,
     )
     print("saved embeddings:", bundle["output_pt"])
     print("saved embedding index:", bundle["output_index_csv"])

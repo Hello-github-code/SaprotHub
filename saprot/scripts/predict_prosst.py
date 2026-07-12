@@ -74,7 +74,7 @@ SUPPORTED_TASK_TYPES = {
 LORA_METADATA_FILENAME = "colabprosst.json"
 
 
-def _load_model(
+def load_prosst_downstream_model(
     task_type: str,
     model_path: str,
     checkpoint_path: str,
@@ -297,7 +297,7 @@ def predict_csv(
     structure_tokens_list = structure_groups[0]
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-    model = _load_model(
+    model = load_prosst_downstream_model(
         task_type,
         model_path,
         checkpoint_path,

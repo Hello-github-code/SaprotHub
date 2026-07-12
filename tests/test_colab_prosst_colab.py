@@ -1932,6 +1932,64 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
                     ],
                 )
 
+    def test_embedding_workflow_uses_finetuned_artifact_metadata(self):
+        import torch
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            input_csv = root / "embedding-input.csv"
+            checkpoint = root / "model.pt"
+            self.pd.DataFrame(
+                [{"sequence": "ACD", "structure_tokens": "0 1 2"}]
+            ).to_csv(input_csv, index=False)
+            torch.save(
+                {
+                    "model": {},
+                    "colabprosst": {
+                        "task": "token_classification",
+                        "base_model": "AI4Protein/ProSST-20",
+                        "structure_vocab_size": 20,
+                        "num_labels": 3,
+                    },
+                },
+                checkpoint,
+            )
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+            captured = {}
+
+            def extract(**kwargs):
+                captured.update(kwargs)
+                Path(kwargs["output_pt"]).write_bytes(b"tensor")
+                self.pd.DataFrame([{"embedding_index": 0}]).to_csv(
+                    kwargs["output_index_csv"],
+                    index=False,
+                )
+                return {"embedding_level": kwargs["level"]}
+
+            with patch(
+                "saprot.utils.colab_prosst_workflow.extract_prosst_embeddings",
+                side_effect=extract,
+            ):
+                workflow.extract_embeddings(
+                    input_csv=str(input_csv),
+                    model_path="AI4Protein/ProSST-20",
+                    checkpoint_path=str(checkpoint),
+                    download=False,
+                )
+
+            self.assertEqual(captured["checkpoint_path"], str(checkpoint))
+            self.assertEqual(
+                captured["checkpoint_task_type"],
+                "token_classification",
+            )
+            self.assertEqual(captured["checkpoint_num_labels"], 3)
+
     def test_saturation_workflow_packages_tables_and_heatmap(self):
         import zipfile
 
@@ -2346,7 +2404,7 @@ class ColabProSSTInferenceTest(unittest.TestCase):
                 return_value=self.FakeTokenizer(),
             ), patch.object(
                 self.prediction,
-                "_load_model",
+                "load_prosst_downstream_model",
                 return_value=FakePredictionModel(),
             ):
                 result = self.prediction.predict_csv(
@@ -2402,7 +2460,7 @@ class ColabProSSTInferenceTest(unittest.TestCase):
                 return_value=self.FakeTokenizer(),
             ), patch.object(
                 self.prediction,
-                "_load_model",
+                "load_prosst_downstream_model",
                 return_value=FakePairPredictionModel(),
             ):
                 result = self.prediction.predict_csv(
@@ -2484,7 +2542,7 @@ class ColabProSSTInferenceTest(unittest.TestCase):
                 return_value=self.FakeTokenizer(),
             ), patch.object(
                 self.prediction,
-                "_load_model",
+                "load_prosst_downstream_model",
                 return_value=FakeTokenPredictionModel(),
             ):
                 result = self.prediction.predict_csv(
@@ -2596,7 +2654,7 @@ class ColabProSSTInferenceTest(unittest.TestCase):
                 "ProSSTClassificationModel",
                 return_value=FakeModel(),
             ) as constructor:
-                self.prediction._load_model(
+                self.prediction.load_prosst_downstream_model(
                     task_type="classification",
                     model_path="AI4Protein/ProSST-20",
                     checkpoint_path=str(adapter_path),
@@ -2659,7 +2717,7 @@ class ColabProSSTInferenceTest(unittest.TestCase):
                 constructor_name,
                 return_value=FakeModel(),
             ) as constructor:
-                self.prediction._load_model(
+                self.prediction.load_prosst_downstream_model(
                     task_type=task_type,
                     model_path="AI4Protein/ProSST-2048",
                     checkpoint_path="model.pt",
@@ -2836,6 +2894,61 @@ class ColabProSSTEmbeddingTest(unittest.TestCase):
                     max_length=2,
                     device="cpu",
                 )
+
+    def test_extracts_embeddings_from_a_downstream_checkpoint(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            input_csv = root / "embeddings.csv"
+            output_pt = root / "embeddings.pt"
+            checkpoint = root / "model.pt"
+            checkpoint.touch()
+            self.pd.DataFrame(
+                [{"sequence": "ACD", "structure_tokens": "0 1 2"}]
+            ).to_csv(input_csv, index=False)
+
+            class FakeDownstreamModel:
+                @staticmethod
+                def get_token_representations(inputs):
+                    return self.torch.stack(
+                        [
+                            inputs["input_ids"].float(),
+                            inputs["ss_input_ids"].float(),
+                        ],
+                        dim=-1,
+                    )
+
+            with patch.object(
+                self.embedding.AutoTokenizer,
+                "from_pretrained",
+                return_value=self.FakeTokenizer(),
+            ), patch.object(
+                self.embedding,
+                "load_prosst_downstream_model",
+                return_value=FakeDownstreamModel(),
+            ) as loader:
+                self.embedding.extract_embeddings(
+                    input_csv=str(input_csv),
+                    output_pt=str(output_pt),
+                    model_path="AI4Protein/ProSST-20",
+                    level="protein",
+                    checkpoint_path=str(checkpoint),
+                    checkpoint_task_type="classification",
+                    checkpoint_num_labels=2,
+                    device="cpu",
+                )
+
+            saved = self.torch.load(output_pt, map_location="cpu")
+            self.assertEqual(saved["checkpoint_path"], str(checkpoint))
+            self.assertEqual(
+                saved["checkpoint_task_type"],
+                "classification",
+            )
+            self.assertEqual(saved["layer_index"], -1)
+            self.assertEqual(saved["protein_embeddings"].shape, (1, 2))
+            self.assertEqual(
+                loader.call_args.kwargs["task_type"],
+                "classification",
+            )
 
 
 class ColabProSSTSaturationTest(unittest.TestCase):
@@ -3339,6 +3452,21 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             for item in embedding_items
             if getattr(item, "description", "") == "Embedding level:"
         )
+        embedding_model_source = next(
+            item
+            for item in embedding_items
+            if getattr(item, "description", "") == "Embedding model:"
+        )
+        embedding_artifact_source = next(
+            item
+            for item in embedding_items
+            if getattr(item, "description", "") == "Model source:"
+        )
+        embedding_artifact_path = next(
+            item
+            for item in embedding_items
+            if getattr(item, "description", "") == "Model or adapter:"
+        )
         self.assertEqual(
             list(embedding_level.options),
             [
@@ -3347,6 +3475,15 @@ class ColabProSSTWidgetTest(unittest.TestCase):
                 ("Both", "both"),
             ],
         )
+        self.assertEqual(embedding_artifact_source.layout.display, "none")
+        self.assertEqual(embedding_artifact_path.layout.display, "none")
+        embedding_model_source.value = "artifact"
+        self.assertIsNone(embedding_artifact_source.layout.display)
+        self.assertIsNone(embedding_artifact_path.layout.display)
+        embedding_artifact_source.value = "huggingface"
+        self.assertEqual(embedding_artifact_path.layout.display, "none")
+        embedding_artifact_source.value = "local"
+        self.assertIsNone(embedding_artifact_path.layout.display)
         self.assertTrue(
             any(
                 "[L, D]" in str(getattr(item, "value", ""))

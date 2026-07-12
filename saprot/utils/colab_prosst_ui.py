@@ -785,6 +785,54 @@ class ColabProSSTUI:
             self._task_intro("classification"), width=self.WIDTH
         )
         model = self._model_dropdown()
+        training_method = widgets.ToggleButtons(
+            options=[
+                ("Standard / full checkpoint", "full"),
+                ("LoRA / PEFT adapter", "lora"),
+            ],
+            value="full",
+            description="Training method:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
+        )
+        lora_rank = widgets.BoundedIntText(
+            value=8,
+            min=1,
+            max=256,
+            step=1,
+            description="LoRA rank:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width=self.WIDTH, display="none"),
+        )
+        lora_alpha = widgets.BoundedIntText(
+            value=16,
+            min=1,
+            max=1024,
+            step=1,
+            description="LoRA alpha:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width=self.WIDTH, display="none"),
+        )
+        lora_dropout = widgets.FloatSlider(
+            value=0.05,
+            min=0.0,
+            max=0.5,
+            step=0.01,
+            readout_format=".2f",
+            description="LoRA dropout:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width=self.WIDTH, display="none"),
+        )
+        lora_help = self._html(
+            "LoRA trains low-rank adapters in ProSST attention/feed-forward "
+            "layers together with the task head. The output is a compact PEFT "
+            "adapter ZIP. When continuing an adapter, its saved r/alpha/dropout "
+            "configuration is reused.",
+            width="100%",
+            max_width=self.GUIDE_WIDTH,
+            overflow="visible",
+            display="none",
+        )
         training_start = widgets.ToggleButtons(
             options=[
                 ("Fresh official model", "fresh"),
@@ -807,14 +855,23 @@ class ColabProSSTUI:
             style={"description_width": "initial"},
             layout=widgets.Layout(display="none"),
         )
-        checkpoint_help = self._html(
+        full_checkpoint_help = (
             "<b>Weight-only fine-tuning:</b> leave exact resume unchecked to "
             "load model weights and start a new optimizer. The checkpoint must "
             "use the same task, base model, structure vocabulary, and category "
             "count.<br><b>Exact resume:</b> also restores optimizer, scheduler, "
             "epoch, and best validation value; it requires a checkpoint saved "
             "with training state. The Epoch setting specifies how many "
-            "additional epochs to run.",
+            "additional epochs to run."
+        )
+        lora_checkpoint_help = (
+            "Upload a ColabProSST LoRA adapter ZIP or enter an extracted adapter "
+            "directory. Adapter weights are continued with a new optimizer; "
+            "the task, base model, structure vocabulary, and category count "
+            "must match."
+        )
+        checkpoint_help = self._html(
+            full_checkpoint_help,
             width="100%",
             max_width=self.GUIDE_WIDTH,
             overflow="visible",
@@ -914,22 +971,55 @@ class ColabProSSTUI:
             csv_input.path.placeholder = placeholder
 
         def toggle_advanced(_button):
-            show = freeze_backbone.layout.display == "none"
+            show = advanced_button.description == "Show advanced settings"
             mode = None if show else "none"
-            freeze_backbone.layout.display = mode
+            use_lora = training_method.value == "lora"
+            freeze_backbone.layout.display = "none" if use_lora else mode
             gradient_checkpointing.layout.display = mode
-            save_training_state.layout.display = mode
+            save_training_state.layout.display = "none" if use_lora else mode
             advanced_button.description = (
                 "Hide advanced settings" if show else "Show advanced settings"
             )
 
-        def update_training_start(change):
-            use_checkpoint = change["new"] == "checkpoint"
+        def update_training_controls(_change=None):
+            use_lora = training_method.value == "lora"
+            use_checkpoint = training_start.value == "checkpoint"
             initial_checkpoint.set_visible(use_checkpoint)
             resume_optimizer_state.layout.display = (
-                None if use_checkpoint else "none"
+                None if use_checkpoint and not use_lora else "none"
             )
             checkpoint_help.layout.display = None if use_checkpoint else "none"
+            checkpoint_help.value = (
+                lora_checkpoint_help if use_lora else full_checkpoint_help
+            )
+            initial_checkpoint.path.description = (
+                "Initial adapter:" if use_lora else "Initial checkpoint:"
+            )
+            initial_checkpoint.path.placeholder = (
+                "Path to a LoRA adapter directory or ZIP"
+                if use_lora
+                else "Path to a compatible ColabProSST .pt checkpoint"
+            )
+            show_new_lora_config = use_lora and not use_checkpoint
+            for item in [lora_rank, lora_alpha, lora_dropout]:
+                item.layout.display = None if show_new_lora_config else "none"
+            lora_help.layout.display = None if use_lora else "none"
+            download.description = (
+                "Download adapter ZIP and test predictions"
+                if use_lora
+                else "Download checkpoint and test predictions"
+            )
+            if use_lora:
+                freeze_backbone.value = False
+                save_training_state.value = False
+                resume_optimizer_state.value = False
+            advanced_visible = advanced_button.description == "Hide advanced settings"
+            freeze_backbone.layout.display = (
+                None if advanced_visible and not use_lora else "none"
+            )
+            save_training_state.layout.display = (
+                None if advanced_visible and not use_lora else "none"
+            )
             if not use_checkpoint:
                 resume_optimizer_state.value = False
 
@@ -973,6 +1063,10 @@ class ColabProSSTUI:
                     resume_optimizer_state.value if use_checkpoint else False
                 ),
                 save_training_state=save_training_state.value,
+                training_method=training_method.value,
+                lora_rank=lora_rank.value,
+                lora_alpha=lora_alpha.value,
+                lora_dropout=lora_dropout.value,
                 download=download.value,
             )
             self.latest_checkpoint = result["checkpoint_path"]
@@ -980,12 +1074,16 @@ class ColabProSSTUI:
             self.latest_task_type = result["task_type"]
             self.latest_num_labels = num_labels.value
             print("Training finished.")
-            print("Model checkpoint:", result["checkpoint_path"])
+            print("Model artifact:", result["checkpoint_path"])
+            print("Download artifact:", result["checkpoint_download_path"])
             print("Test predictions:", result["test_result_csv"])
-            print(
-                "Checkpoint training state:",
-                "included" if result["save_training_state"] else "weights only",
-            )
+            if result["training_method"] == "full":
+                print(
+                    "Checkpoint training state:",
+                    "included"
+                    if result["save_training_state"]
+                    else "weights only",
+                )
             finish_hint.value = (
                 "<h3>The training is completed. You can then:</h3>"
                 "<ul>"
@@ -1003,8 +1101,9 @@ class ColabProSSTUI:
 
         update_task({"new": task_type.value})
         task_type.observe(update_task, names="value")
-        update_training_start({"new": training_start.value})
-        training_start.observe(update_training_start, names="value")
+        update_training_controls()
+        training_start.observe(update_training_controls, names="value")
+        training_method.observe(update_training_controls, names="value")
         template_button.on_click(
             lambda button: self._download_templates(button, model.value)
         )
@@ -1022,6 +1121,11 @@ class ColabProSSTUI:
             task_intro,
             self._heading("Model setting:", level=3),
             model,
+            training_method,
+            lora_rank,
+            lora_alpha,
+            lora_dropout,
+            lora_help,
             training_start,
             *initial_checkpoint.items,
             resume_optimizer_state,
@@ -1143,8 +1247,8 @@ class ColabProSSTUI:
         model = self._model_dropdown()
         checkpoint = _UploadField(
             self,
-            "Model checkpoint:",
-            "Path to a ColabProSST .pt checkpoint",
+            "Model or adapter:",
+            "Path to a .pt checkpoint, LoRA adapter directory, or LoRA ZIP",
         )
         checkpoint.value = self.latest_checkpoint
         csv_input = _UploadField(
@@ -1187,7 +1291,9 @@ class ColabProSSTUI:
 
         def predict():
             if not checkpoint.value:
-                raise ValueError("Upload a model checkpoint or enter its path.")
+                raise ValueError(
+                    "Upload a model checkpoint/adapter or enter its path."
+                )
             if not csv_input.value:
                 raise ValueError("Upload a prediction CSV or enter its path.")
             model_spec = get_prosst_model_spec(model.value)
@@ -1228,6 +1334,12 @@ class ColabProSSTUI:
             self._heading("Choose the model for prediction:", level=3),
             model,
             *checkpoint.items,
+            self._html(
+                "Use a full ColabProSST <code>.pt</code> checkpoint, an "
+                "extracted LoRA adapter directory, or a downloaded LoRA "
+                "adapter ZIP. Select the checkpoint's original task and base "
+                "model."
+            ),
             self._heading("Input proteins:", level=3),
             *csv_input.items,
             *structure_input.items,

@@ -74,6 +74,7 @@ class ColabProSSTNotebookTest(unittest.TestCase):
             introduction,
         )
         self.assertIn("checkpoint continuation", introduction)
+        self.assertIn("LoRA/PEFT training", introduction)
         self.assertIn("ColabSaprot", introduction)
         self.assertIn("ColabSeprot", introduction)
         self.assertIn("ColabESMC", introduction)
@@ -3202,6 +3203,26 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             for item in training_items
             if getattr(item, "description", "") == "Training start:"
         )
+        training_method = next(
+            item
+            for item in training_items
+            if getattr(item, "description", "") == "Training method:"
+        )
+        lora_rank = next(
+            item
+            for item in training_items
+            if getattr(item, "description", "") == "LoRA rank:"
+        )
+        lora_alpha = next(
+            item
+            for item in training_items
+            if getattr(item, "description", "") == "LoRA alpha:"
+        )
+        lora_dropout = next(
+            item
+            for item in training_items
+            if getattr(item, "description", "") == "LoRA dropout:"
+        )
         initial_checkpoint = next(
             item
             for item in training_items
@@ -3242,6 +3263,33 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         training_start.value = "fresh"
         self.assertEqual(initial_checkpoint.layout.display, "none")
         self.assertEqual(exact_resume.layout.display, "none")
+        self.assertEqual(
+            list(training_method.options),
+            [
+                ("Standard / full checkpoint", "full"),
+                ("LoRA / PEFT adapter", "lora"),
+            ],
+        )
+        self.assertEqual(lora_rank.layout.display, "none")
+        training_method.value = "lora"
+        self.assertIsNone(lora_rank.layout.display)
+        self.assertIsNone(lora_alpha.layout.display)
+        self.assertIsNone(lora_dropout.layout.display)
+        self.assertTrue(
+            any(
+                "compact PEFT adapter ZIP"
+                in str(getattr(item, "value", ""))
+                for item in training_items
+            )
+        )
+        training_start.value = "checkpoint"
+        self.assertEqual(lora_rank.layout.display, "none")
+        self.assertEqual(exact_resume.layout.display, "none")
+        self.assertEqual(initial_checkpoint.description, "Initial adapter:")
+        training_start.value = "fresh"
+        self.assertIsNone(lora_rank.layout.display)
+        training_method.value = "full"
+        self.assertEqual(lora_rank.layout.display, "none")
         training_task.value = "token_classification"
         self.assertIsNone(category_count.layout.display)
         self.assertIn("residue_labels", training_csv.placeholder)
@@ -3282,6 +3330,11 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             for item in prediction_items
             if getattr(item, "description", "") == "Prediction CSV:"
         )
+        prediction_model_artifact = next(
+            item
+            for item in prediction_items
+            if getattr(item, "description", "") == "Model or adapter:"
+        )
         prediction_structure = next(
             item
             for item in prediction_items
@@ -3289,6 +3342,7 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         )
         self.assertEqual(prediction_task.value, "token_classification")
         self.assertEqual(prediction_categories.value, 3)
+        self.assertIn("LoRA ZIP", prediction_model_artifact.placeholder)
         self.assertTrue(
             any(
                 "aligned one-to-one with the input residues"

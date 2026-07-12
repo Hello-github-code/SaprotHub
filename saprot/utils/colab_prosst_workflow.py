@@ -19,6 +19,9 @@ from saprot.data.prosst_labels import (
 )
 from saprot.scripts.mutation_zeroshot_prosst import score_mutants
 from saprot.scripts.predict_prosst import (
+    CLASSIFICATION_TASK_TYPES,
+    PAIR_TASK_TYPES,
+    SUPPORTED_TASK_TYPES,
     predict_csv,
     validate_checkpoint_compatibility,
 )
@@ -504,7 +507,7 @@ class ColabProSSTWorkflow:
             hint = (
                 " If these labels are continuous scores, choose the regression "
                 "workflow instead."
-                if task_name == "Classification"
+                if "classification" in task_name.lower()
                 else ""
             )
             raise ValueError(
@@ -543,7 +546,7 @@ class ColabProSSTWorkflow:
             )
             raise ValueError(f"Training CSV must contain a {expected} column.")
 
-        if task_type == "classification":
+        if task_type in {"classification", "pair_classification"}:
             labels = pd.to_numeric(df[label_column].dropna(), errors="raise")
             integer_labels = labels.astype(int)
             if not labels.equals(integer_labels.astype(labels.dtype)):
@@ -551,12 +554,17 @@ class ColabProSSTWorkflow:
                     "Classification labels must be integer category IDs in the "
                     "range 0..NUM_LABELS-1."
                 )
+            task_name = (
+                "Protein-pair classification"
+                if task_type == "pair_classification"
+                else "Classification"
+            )
             cls._validate_category_ids(
                 integer_labels.tolist(),
                 num_labels,
-                "Classification",
+                task_name,
             )
-        elif task_type == "regression":
+        elif task_type in {"regression", "pair_regression"}:
             pd.to_numeric(df[label_column], errors="raise")
         elif task_type == "token_classification":
             sequence_column = lower_columns.get(
@@ -584,6 +592,18 @@ class ColabProSSTWorkflow:
                 category_ids,
                 num_labels,
                 "Residue-level classification",
+            )
+
+    @staticmethod
+    def _validate_structure_reuse(
+        task_type: str,
+        use_last_structure_tokens: bool,
+    ) -> None:
+        if task_type in PAIR_TASK_TYPES and use_last_structure_tokens:
+            raise ValueError(
+                "Protein-pair tasks cannot reuse one latest structure "
+                "conversion. Provide structure_tokens_1 and "
+                "structure_tokens_2, or two structure paths per CSV row."
             )
 
     @staticmethod
@@ -671,17 +691,11 @@ class ColabProSSTWorkflow:
         learning_rate: float = 2.0e-5,
         download: bool = True,
     ) -> dict:
-        if task_type not in {
-            "classification",
-            "regression",
-            "token_classification",
-        }:
-            raise ValueError(
-                "task_type must be classification, regression, or "
-                "token_classification."
-            )
+        if task_type not in SUPPORTED_TASK_TYPES:
+            raise ValueError(f"Unsupported ProSST task_type: {task_type}.")
         if learning_rate <= 0:
             raise ValueError("learning_rate must be greater than zero.")
+        self._validate_structure_reuse(task_type, use_last_structure_tokens)
         task_name = self._validate_task_name(task_name)
         structure_vocab_size = resolve_structure_vocab_size(
             model_path,
@@ -716,6 +730,10 @@ class ColabProSSTWorkflow:
             "classification": "prosst/prosst_classification_model",
             "regression": "prosst/prosst_regression_model",
             "token_classification": "prosst/prosst_token_classification_model",
+            "pair_classification": (
+                "prosst/prosst_pair_classification_model"
+            ),
+            "pair_regression": "prosst/prosst_pair_regression_model",
         }[task_type]
         dataset_py = {
             "classification": "prosst/prosst_classification_dataset",
@@ -723,6 +741,10 @@ class ColabProSSTWorkflow:
             "token_classification": (
                 "prosst/prosst_token_classification_dataset"
             ),
+            "pair_classification": (
+                "prosst/prosst_pair_classification_dataset"
+            ),
+            "pair_regression": "prosst/prosst_pair_regression_dataset",
         }[task_type]
 
         checkpoint_path = self.weight_dir / f"{task_name}.pt"
@@ -741,7 +763,7 @@ class ColabProSSTWorkflow:
             },
             "optimizer_kwargs": {"class": "AdamW", "betas": [0.9, 0.98], "weight_decay": 0.01},
         }
-        if task_type in {"classification", "token_classification"}:
+        if task_type in CLASSIFICATION_TASK_TYPES:
             model_kwargs["num_labels"] = num_labels
 
         config = EasyDict(
@@ -825,15 +847,9 @@ class ColabProSSTWorkflow:
         output_csv: Optional[str] = None,
         download: bool = True,
     ) -> pd.DataFrame:
-        if task_type not in {
-            "classification",
-            "regression",
-            "token_classification",
-        }:
-            raise ValueError(
-                "task_type must be classification, regression, or "
-                "token_classification."
-            )
+        if task_type not in SUPPORTED_TASK_TYPES:
+            raise ValueError(f"Unsupported ProSST task_type: {task_type}.")
+        self._validate_structure_reuse(task_type, use_last_structure_tokens)
         structure_vocab_size = resolve_structure_vocab_size(
             model_path,
             structure_vocab_size,
@@ -886,15 +902,8 @@ class ColabProSSTWorkflow:
     ) -> Path:
         if not repo_id.strip():
             raise ValueError("Set repo_id, for example: username/Model-ProSST-Task")
-        if task_type not in {
-            "classification",
-            "regression",
-            "token_classification",
-        }:
-            raise ValueError(
-                "task_type must be classification, regression, or "
-                "token_classification."
-            )
+        if task_type not in SUPPORTED_TASK_TYPES:
+            raise ValueError(f"Unsupported ProSST task_type: {task_type}.")
         structure_vocab_size = resolve_structure_vocab_size(
             model_path,
             structure_vocab_size,
@@ -922,22 +931,32 @@ class ColabProSSTWorkflow:
         package_dir.mkdir(parents=True, exist_ok=True)
 
         shutil.copy2(checkpoint, package_dir / "model.pt")
+        input_format = "amino-acid input_ids + ProSST ss_input_ids"
+        if task_type in PAIR_TASK_TYPES:
+            input_format = f"two sets of {input_format}"
         metadata = {
             "model_family": "ProSST",
             "base_model": model_path,
             "checkpoint_format": "SaprotHub/ColabProSST torch checkpoint",
             "task_type": task_type,
-            "input_format": "amino-acid input_ids + ProSST ss_input_ids",
+            "input_format": input_format,
             "structure_vocab_size": structure_vocab_size,
             "colab_tool": "ColabProSST",
         }
-        if task_type in {"classification", "token_classification"}:
+        if task_type in CLASSIFICATION_TASK_TYPES:
             metadata["num_labels"] = int(num_labels)
         (package_dir / "metadata.json").write_text(
             json.dumps(metadata, indent=2),
             encoding="utf-8",
         )
 
+        input_description = (
+            "Each pair member has its own amino-acid tokenizer `input_ids` "
+            "and matching ProSST structure token `ss_input_ids`."
+            if task_type in PAIR_TASK_TYPES
+            else "ColabProSST uses amino-acid tokenizer `input_ids` together "
+            "with ProSST structure token `ss_input_ids`."
+        )
         readme = f"""---
 library_name: pytorch
 base_model: {model_path}
@@ -955,7 +974,7 @@ This repository contains a SaprotHub/ColabProSST checkpoint (`model.pt`) and met
 
 ## Input Format
 
-ColabProSST uses amino-acid tokenizer `input_ids` together with ProSST structure token `ss_input_ids`. It does not use SaProt AA+3Di merged tokens.
+{input_description} ColabProSST does not use SaProt AA+3Di merged tokens.
 
 ## Task
 

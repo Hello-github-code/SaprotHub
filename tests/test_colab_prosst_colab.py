@@ -1263,6 +1263,164 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
             )
             self.assertEqual(result["task_type"], "token_classification")
 
+    def test_pair_training_selects_pair_models_and_datasets(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            csv_path = root / "pair-training.csv"
+            self.pd.DataFrame(
+                [
+                    {
+                        "sequence_1": "ACD",
+                        "sequence_2": "AC",
+                        "label": label,
+                        "stage": stage,
+                        "structure_tokens_1": "0 1 2",
+                        "structure_tokens_2": "3 4",
+                    }
+                    for label, stage in [(0, "train"), (1, "valid"), (0, "test")]
+                ]
+            ).to_csv(csv_path, index=False)
+
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+            captured = []
+
+            class DummyModel:
+                pass
+
+            class DummyDataModule:
+                pass
+
+            class DummyTrainer:
+                def fit(self, model, datamodule):
+                    pass
+
+                def test(self, model, datamodule):
+                    pass
+
+            def load_model(config):
+                captured[-1]["model"] = config
+                return DummyModel()
+
+            def load_dataset(config):
+                captured[-1]["dataset"] = config
+                return DummyDataModule()
+
+            with patch(
+                "saprot.utils.colab_prosst_workflow.construct_prosst_lmdb"
+            ), patch(
+                "saprot.utils.colab_prosst_workflow.my_load_model",
+                side_effect=load_model,
+            ), patch(
+                "saprot.utils.colab_prosst_workflow.my_load_dataset",
+                side_effect=load_dataset,
+            ), patch(
+                "saprot.utils.colab_prosst_workflow.load_trainer",
+                return_value=DummyTrainer(),
+            ):
+                for task_type in ["pair_classification", "pair_regression"]:
+                    captured.append({"task_type": task_type})
+                    workflow.train_downstream(
+                        task_type=task_type,
+                        input_csv=str(csv_path),
+                        task_name=f"{task_type}-test",
+                        num_labels=2,
+                        max_epochs=1,
+                        load_pretrained=False,
+                        download=False,
+                    )
+
+            expected = {
+                "pair_classification": (
+                    "prosst/prosst_pair_classification_model",
+                    "prosst/prosst_pair_classification_dataset",
+                ),
+                "pair_regression": (
+                    "prosst/prosst_pair_regression_model",
+                    "prosst/prosst_pair_regression_dataset",
+                ),
+            }
+            for entry in captured:
+                model_path, dataset_path = expected[entry["task_type"]]
+                self.assertEqual(entry["model"].model_py_path, model_path)
+                self.assertEqual(entry["dataset"].dataset_py_path, dataset_path)
+            self.assertEqual(captured[0]["model"].kwargs.num_labels, 2)
+            self.assertNotIn("num_labels", captured[1]["model"].kwargs)
+
+    def test_pair_tasks_reject_single_structure_reuse(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+
+            for method_name, kwargs in [
+                (
+                    "train_downstream",
+                    {
+                        "task_type": "pair_classification",
+                        "input_csv": "unused.csv",
+                    },
+                ),
+                (
+                    "predict_downstream",
+                    {
+                        "task_type": "pair_regression",
+                        "input_csv": "unused.csv",
+                        "checkpoint_path": "unused.pt",
+                    },
+                ),
+            ]:
+                with self.subTest(method=method_name), self.assertRaisesRegex(
+                    ValueError,
+                    "cannot reuse one latest structure conversion",
+                ):
+                    getattr(workflow, method_name)(
+                        use_last_structure_tokens=True,
+                        **kwargs,
+                    )
+
+    def test_pair_label_validation_matches_scalar_task_semantics(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            classification_csv = root / "pair-classification.csv"
+            regression_csv = root / "pair-regression.csv"
+            self.pd.DataFrame({"label": [0, 1, 0]}).to_csv(
+                classification_csv,
+                index=False,
+            )
+            self.pd.DataFrame({"label": [0.25, -1.5, 2.0]}).to_csv(
+                regression_csv,
+                index=False,
+            )
+
+            self.workflow_class._validate_training_labels(
+                str(classification_csv),
+                "pair_classification",
+                2,
+            )
+            self.workflow_class._validate_training_labels(
+                str(regression_csv),
+                "pair_regression",
+                2,
+            )
+
+            with self.assertRaisesRegex(ValueError, "integer category IDs"):
+                self.workflow_class._validate_training_labels(
+                    str(regression_csv),
+                    "pair_classification",
+                    2,
+                )
+
     def test_csv_templates_follow_the_selected_model_vocabulary(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)

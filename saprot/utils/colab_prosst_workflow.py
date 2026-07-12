@@ -150,6 +150,13 @@ class ColabProSSTWorkflow:
         target_dir = self.asset_dir / archive_path.stem
         shutil.rmtree(target_dir, ignore_errors=True)
         target_dir.mkdir(parents=True, exist_ok=True)
+        self._extract_zip_archive(archive_path, target_dir)
+
+        print("extracted structure assets to", target_dir)
+        return str(target_dir)
+
+    @staticmethod
+    def _extract_zip_archive(archive_path: Path, target_dir: Path) -> None:
         target_root = target_dir.resolve()
 
         with zipfile.ZipFile(archive_path) as archive:
@@ -159,8 +166,30 @@ class ColabProSSTWorkflow:
                     raise ValueError(f"Unsafe zip member path: {member.filename}")
                 archive.extract(member, target_dir)
 
-        print("extracted structure assets to", target_dir)
-        return str(target_dir)
+    def resolve_lora_adapter(self, checkpoint_path: str) -> str:
+        checkpoint = Path(str(checkpoint_path).strip())
+        if checkpoint.is_file() and checkpoint.suffix.lower() == ".zip":
+            target_dir = self.saprothub_dir / "loaded_lora" / checkpoint.stem
+            shutil.rmtree(target_dir, ignore_errors=True)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            self._extract_zip_archive(checkpoint, target_dir)
+            candidates = sorted(target_dir.rglob("adapter_config.json"))
+            if len(candidates) != 1:
+                raise ValueError(
+                    "A LoRA ZIP must contain exactly one adapter_config.json; "
+                    f"found {len(candidates)}."
+                )
+            checkpoint = candidates[0].parent
+
+        if not checkpoint.is_dir():
+            raise FileNotFoundError(
+                f"LoRA adapter directory or ZIP does not exist: {checkpoint}"
+            )
+        if not (checkpoint / "adapter_config.json").is_file():
+            raise ValueError(
+                f"LoRA adapter has no adapter_config.json: {checkpoint}"
+            )
+        return str(checkpoint)
 
     def create_csv_templates(
         self,
@@ -1012,6 +1041,10 @@ class ColabProSSTWorkflow:
         initial_checkpoint: str = "",
         resume_optimizer_state: bool = False,
         save_training_state: bool = False,
+        training_method: str = "full",
+        lora_rank: int = 8,
+        lora_alpha: int = 16,
+        lora_dropout: float = 0.05,
         learning_rate: float = 2.0e-5,
         download: bool = True,
     ) -> dict:
@@ -1019,6 +1052,16 @@ class ColabProSSTWorkflow:
             raise ValueError(f"Unsupported ProSST task_type: {task_type}.")
         if learning_rate <= 0:
             raise ValueError("learning_rate must be greater than zero.")
+        training_method = str(training_method).strip().lower()
+        if training_method not in {"full", "lora"}:
+            raise ValueError("training_method must be `full` or `lora`.")
+        use_lora = training_method == "lora"
+        if lora_rank < 1:
+            raise ValueError("LoRA rank must be at least 1.")
+        if lora_alpha < 1:
+            raise ValueError("LoRA alpha must be at least 1.")
+        if not 0 <= lora_dropout < 1:
+            raise ValueError("LoRA dropout must be in the range [0, 1).")
         self._validate_structure_reuse(task_type, use_last_structure_tokens)
         task_name = self._validate_task_name(task_name)
         structure_vocab_size = resolve_structure_vocab_size(
@@ -1030,7 +1073,29 @@ class ColabProSSTWorkflow:
             raise ValueError(
                 "Exact resume requires an initial ColabProSST checkpoint."
             )
-        if initial_checkpoint:
+        if use_lora and resume_optimizer_state:
+            raise ValueError(
+                "LoRA continuation reloads adapter weights with a new "
+                "optimizer; exact optimizer resume is available only for full "
+                "ColabProSST .pt checkpoints."
+            )
+        if use_lora and save_training_state:
+            raise ValueError(
+                "LoRA training saves a PEFT adapter rather than optimizer "
+                "state. Disable save_training_state."
+            )
+        if use_lora:
+            load_pretrained = True
+        if use_lora and initial_checkpoint:
+            initial_checkpoint = self.resolve_lora_adapter(initial_checkpoint)
+            validate_checkpoint_compatibility(
+                initial_checkpoint,
+                task_type,
+                model_path,
+                structure_vocab_size,
+                num_labels,
+            )
+        elif initial_checkpoint:
             self._load_training_checkpoint(
                 initial_checkpoint,
                 require_training_state=resume_optimizer_state,
@@ -1089,13 +1154,17 @@ class ColabProSSTWorkflow:
             "pair_regression": "prosst/prosst_pair_regression_dataset",
         }[task_type]
 
-        checkpoint_path = self.weight_dir / f"{task_name}.pt"
+        checkpoint_path = (
+            self.weight_dir / f"{task_name}_lora"
+            if use_lora
+            else self.weight_dir / f"{task_name}.pt"
+        )
         test_result_csv = self.output_dir / f"{task_name}_{task_type}_test_predictions.csv"
         model_kwargs = {
             "config_path": model_path,
             "structure_vocab_size": structure_vocab_size,
             "load_pretrained": load_pretrained,
-            "freeze_backbone": freeze_backbone,
+            "freeze_backbone": False if use_lora else freeze_backbone,
             "gradient_checkpointing": gradient_checkpointing,
             "save_path": str(checkpoint_path),
             "save_weights_only": not save_training_state,
@@ -1108,7 +1177,20 @@ class ColabProSSTWorkflow:
         }
         if task_type in CLASSIFICATION_TASK_TYPES:
             model_kwargs["num_labels"] = num_labels
-        if initial_checkpoint:
+        if use_lora:
+            model_kwargs["lora_kwargs"] = {
+                "is_trainable": True,
+                "num_lora": 1,
+                "config_list": (
+                    [{"lora_config_path": initial_checkpoint}]
+                    if initial_checkpoint
+                    else []
+                ),
+                "r": int(lora_rank),
+                "lora_alpha": int(lora_alpha),
+                "lora_dropout": float(lora_dropout),
+            }
+        elif initial_checkpoint:
             model_kwargs["from_checkpoint"] = initial_checkpoint
             model_kwargs["load_prev_scheduler"] = resume_optimizer_state
 
@@ -1150,7 +1232,10 @@ class ColabProSSTWorkflow:
         try:
             trainer.fit(model=model, datamodule=data_module)
 
-            if checkpoint_path.exists():
+            if checkpoint_path.exists() and use_lora:
+                print("loading best LoRA adapter from", checkpoint_path)
+                model.load_lora_adapter(str(checkpoint_path))
+            elif checkpoint_path.exists():
                 print("loading best checkpoint from", checkpoint_path)
                 model.load_checkpoint(str(checkpoint_path))
             else:
@@ -1161,16 +1246,28 @@ class ColabProSSTWorkflow:
             self._close_lmdb_datamodule(data_module)
 
         print("test predictions:", test_result_csv)
-        print("model checkpoint:", checkpoint_path)
+        artifact_label = "LoRA adapter" if use_lora else "model checkpoint"
+        print(f"{artifact_label}:", checkpoint_path)
+
+        checkpoint_download_path = checkpoint_path
+        if use_lora and checkpoint_path.exists():
+            checkpoint_download_path = Path(
+                shutil.make_archive(
+                    str(checkpoint_path),
+                    "zip",
+                    root_dir=checkpoint_path,
+                )
+            )
 
         if download:
             if test_result_csv.exists():
                 self._download(test_result_csv)
-            if checkpoint_path.exists():
-                self._download(checkpoint_path)
+            if checkpoint_download_path.exists():
+                self._download(checkpoint_download_path)
 
         return {
             "checkpoint_path": str(checkpoint_path),
+            "checkpoint_download_path": str(checkpoint_download_path),
             "test_result_csv": str(test_result_csv),
             "task_type": task_type,
             "model_path": model_path,
@@ -1178,6 +1275,7 @@ class ColabProSSTWorkflow:
             "initial_checkpoint": initial_checkpoint,
             "resume_optimizer_state": bool(resume_optimizer_state),
             "save_training_state": bool(save_training_state),
+            "training_method": training_method,
         }
 
     def predict_downstream(
@@ -1203,6 +1301,9 @@ class ColabProSSTWorkflow:
             model_path,
             structure_vocab_size,
         )
+        checkpoint = Path(str(checkpoint_path).strip())
+        if checkpoint.is_dir() or checkpoint.suffix.lower() == ".zip":
+            checkpoint_path = self.resolve_lora_adapter(str(checkpoint))
 
         input_csv = self._prepare_input_csv(
             input_csv,

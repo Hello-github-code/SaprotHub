@@ -1315,6 +1315,148 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
                     require_training_state=True,
                 )
 
+    def test_lora_training_saves_and_reloads_a_peft_adapter(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            csv_path = root / "training.csv"
+            self.pd.DataFrame(
+                [
+                    {
+                        "sequence": sequence,
+                        "label": label,
+                        "stage": stage,
+                        "structure_tokens": tokens,
+                    }
+                    for sequence, label, stage, tokens in [
+                        ("ACD", 0, "train", "0 1 2"),
+                        ("ACE", 1, "valid", "0 1 3"),
+                        ("ACF", 0, "test", "0 1 4"),
+                    ]
+                ]
+            ).to_csv(csv_path, index=False)
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+            captured = {}
+
+            class DummyModel:
+                def load_lora_adapter(self, path):
+                    captured["reloaded_adapter"] = path
+
+            class DummyDataModule:
+                pass
+
+            class DummyTrainer:
+                def fit(self, model, datamodule):
+                    adapter_path = Path(captured["model"].kwargs.save_path)
+                    adapter_path.mkdir(parents=True)
+                    (adapter_path / "adapter_config.json").write_text(
+                        "{}",
+                        encoding="utf-8",
+                    )
+                    (adapter_path / "adapter_model.safetensors").write_bytes(
+                        b"adapter"
+                    )
+
+                def test(self, model, datamodule):
+                    pass
+
+            def load_model(config):
+                captured["model"] = config
+                return DummyModel()
+
+            with patch(
+                "saprot.utils.colab_prosst_workflow.construct_prosst_lmdb"
+            ), patch(
+                "saprot.utils.colab_prosst_workflow.my_load_model",
+                side_effect=load_model,
+            ), patch(
+                "saprot.utils.colab_prosst_workflow.my_load_dataset",
+                return_value=DummyDataModule(),
+            ), patch(
+                "saprot.utils.colab_prosst_workflow.load_trainer",
+                return_value=DummyTrainer(),
+            ):
+                result = workflow.train_downstream(
+                    task_type="classification",
+                    input_csv=str(csv_path),
+                    task_name="lora-test",
+                    num_labels=2,
+                    model_path="AI4Protein/ProSST-20",
+                    training_method="lora",
+                    lora_rank=4,
+                    lora_alpha=8,
+                    lora_dropout=0.1,
+                    download=False,
+                )
+
+            kwargs = captured["model"].kwargs
+            self.assertTrue(kwargs.load_pretrained)
+            self.assertFalse(kwargs.freeze_backbone)
+            self.assertEqual(
+                kwargs.lora_kwargs,
+                {
+                    "is_trainable": True,
+                    "num_lora": 1,
+                    "config_list": [],
+                    "r": 4,
+                    "lora_alpha": 8,
+                    "lora_dropout": 0.1,
+                },
+            )
+            self.assertEqual(
+                captured["reloaded_adapter"],
+                result["checkpoint_path"],
+            )
+            self.assertTrue(Path(result["checkpoint_download_path"]).is_file())
+            self.assertEqual(result["training_method"], "lora")
+
+    def test_lora_zip_resolves_to_its_adapter_directory(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            source = root / "source"
+            source.mkdir()
+            (source / "adapter_config.json").write_text("{}", encoding="utf-8")
+            (source / "adapter_model.safetensors").write_bytes(b"adapter")
+            archive = Path(shutil.make_archive(str(root / "adapter"), "zip", source))
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+
+            resolved = Path(workflow.resolve_lora_adapter(str(archive)))
+            self.assertTrue((resolved / "adapter_config.json").is_file())
+            self.assertTrue((resolved / "adapter_model.safetensors").is_file())
+
+    def test_lora_training_rejects_optimizer_resume(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+            with self.assertRaisesRegex(
+                ValueError,
+                "available only for full ColabProSST",
+            ):
+                workflow.train_downstream(
+                    task_type="classification",
+                    input_csv="unused.csv",
+                    training_method="lora",
+                    initial_checkpoint="adapter.zip",
+                    resume_optimizer_state=True,
+                )
+
     def test_uploaded_content_is_saved_with_a_safe_filename(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)

@@ -555,6 +555,7 @@ class ColabProSSTUI:
         self.latest_task_type = "classification"
         self.latest_num_labels = 2
         self._polling = False
+        self._task_lock = threading.Lock()
         self._build_system_widgets()
 
     def _html(self, value, **layout_kwargs):
@@ -830,13 +831,7 @@ class ColabProSSTUI:
         self._navigate(self.current_page, remember=False)
 
     def _start_task(self, button, output, action):
-        if self.active_thread is not None and self.active_thread.is_alive():
-            with output:
-                print("A task is already running. Stop it before starting another one.")
-            return
-
         def runner():
-            button.disabled = True
             output.clear_output(wait=True)
             with output:
                 try:
@@ -848,11 +843,31 @@ class ColabProSSTUI:
                     traceback.print_exc()
                 finally:
                     button.disabled = False
-                    if self.active_thread is threading.current_thread():
-                        self.active_thread = None
+                    with self._task_lock:
+                        if self.active_thread is threading.current_thread():
+                            self.active_thread = None
 
-        self.active_thread = threading.Thread(target=runner, daemon=True)
-        self.active_thread.start()
+        with self._task_lock:
+            if self.active_thread is not None:
+                thread = None
+            else:
+                button.disabled = True
+                thread = threading.Thread(target=runner, daemon=True)
+                self.active_thread = thread
+
+        if thread is None:
+            with output:
+                print("A task is already running. Stop it before starting another one.")
+            return
+
+        try:
+            thread.start()
+        except Exception:
+            with self._task_lock:
+                if self.active_thread is thread:
+                    self.active_thread = None
+            button.disabled = False
+            raise
 
     def stop_task(self, silent=False):
         thread = self.active_thread

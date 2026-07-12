@@ -3750,6 +3750,29 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         prediction_task.value = "pair_regression"
         self.assertEqual(prediction_categories.layout.display, "none")
 
+        class DeferredThread:
+            instances = []
+
+            def __init__(self, target, daemon):
+                self.target = target
+                self.daemon = daemon
+                self.instances.append(self)
+
+            def start(self):
+                pass
+
+            def is_alive(self):
+                return False
+
+        duplicate_button = ui._button("Download once")
+        duplicate_output = ui._output()
+        with patch.object(module.threading, "Thread", DeferredThread):
+            ui._start_task(duplicate_button, duplicate_output, lambda: None)
+            ui._start_task(duplicate_button, duplicate_output, lambda: None)
+        self.assertEqual(len(DeferredThread.instances), 1)
+        self.assertTrue(duplicate_button.disabled)
+        ui.active_thread = None
+
         task_button = ui._button("Run test task")
         task_output = ui._output()
         task_started = threading.Event()

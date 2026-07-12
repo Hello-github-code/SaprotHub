@@ -65,6 +65,10 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("PDB/mmCIF structure quantization", introduction)
         self.assertIn("residue-level classification", introduction)
         self.assertIn("protein-pair classification and regression", introduction)
+        self.assertIn(
+            "protein-level and residue-level embedding extraction",
+            introduction,
+        )
         self.assertIn("ColabSaprot", introduction)
         self.assertIn("ColabSeprot", introduction)
         self.assertIn("ColabESMC", introduction)
@@ -207,7 +211,7 @@ class ColabProSSTNotebookTest(unittest.TestCase):
     def test_task_pages_require_an_explicit_structure_input_mode(self):
         source = UI_PATH.read_text(encoding="utf-8")
 
-        self.assertEqual(source.count("structure_input = _StructureInput(self)"), 3)
+        self.assertEqual(source.count("structure_input = _StructureInput(self)"), 4)
         self.assertIn("CSV contains structure_tokens", source)
         self.assertIn("Reuse latest structure conversion", source)
         self.assertIn("CSV contains structure file paths", source)
@@ -1513,6 +1517,9 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
             pair_prediction = self.pd.read_csv(
                 root / "templates" / "prosst_pair_prediction_template.csv"
             )
+            embedding_template = self.pd.read_csv(
+                root / "templates" / "prosst_embedding_template.csv"
+            )
             self.assertEqual(
                 token_template["structure_vocab_size"].unique().tolist(),
                 [20],
@@ -1544,6 +1551,18 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
                 )
             )
             self.assertNotIn("label", pair_prediction.columns)
+            self.assertEqual(
+                embedding_template.columns.tolist(),
+                token_template[[
+                    "sequence",
+                    "structure_tokens",
+                    "structure_vocab_size",
+                ]].columns.tolist(),
+            )
+            self.assertEqual(
+                embedding_template["structure_vocab_size"].unique().tolist(),
+                [20],
+            )
 
     def test_reusing_latest_conversion_overrides_other_structure_sources(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
@@ -2506,6 +2525,7 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             ui._training_page,
             ui._prediction_menu_page,
             ui._property_prediction_page,
+            ui._embedding_page,
             ui._mutation_page,
             ui._structure_page,
             ui._share_page,
@@ -2515,6 +2535,41 @@ class ColabProSSTWidgetTest(unittest.TestCase):
                 rendered.clear()
                 page()
                 self.assertTrue(rendered)
+
+        rendered.clear()
+        ui._prediction_menu_page()
+        prediction_menu_items = rendered[-1]
+        self.assertTrue(
+            any(
+                getattr(item, "description", "")
+                == "Extract protein embeddings"
+                for item in prediction_menu_items
+            )
+        )
+
+        rendered.clear()
+        ui._embedding_page()
+        embedding_items = rendered[-1]
+        embedding_level = next(
+            item
+            for item in embedding_items
+            if getattr(item, "description", "") == "Embedding level:"
+        )
+        self.assertEqual(
+            list(embedding_level.options),
+            [
+                ("Protein-level", "protein"),
+                ("Residue-level", "residue"),
+                ("Both", "both"),
+            ],
+        )
+        self.assertTrue(
+            any(
+                "[L, D]" in str(getattr(item, "value", ""))
+                and "CLS, EOS, and padding" in str(getattr(item, "value", ""))
+                for item in embedding_items
+            )
+        )
 
         rendered.clear()
         ui._training_page()

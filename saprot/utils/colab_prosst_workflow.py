@@ -420,7 +420,7 @@ class ColabProSSTWorkflow:
                 index=False,
             )
 
-        pd.DataFrame(
+        single_input_tokens = pd.DataFrame(
             [
                 {
                     "sequence": "ACD",
@@ -433,14 +433,24 @@ class ColabProSSTWorkflow:
                     "structure_vocab_size": structure_vocab_size,
                 },
             ]
-        ).to_csv(template_home / "prosst_prediction_template.csv", index=False)
+        )
+        for template_name in ["prediction", "embedding"]:
+            single_input_tokens.to_csv(
+                template_home / f"prosst_{template_name}_template.csv",
+                index=False,
+            )
 
-        pd.DataFrame(
+        single_input_paths = pd.DataFrame(
             [
                 {"sequence": "ACD", "pdb_path": "protein_1.pdb", "chain_id": ""},
                 {"sequence": "ACE", "pdb_path": "protein_2.pdb", "chain_id": ""},
             ]
-        ).to_csv(template_home / "prosst_prediction_pdb_template.csv", index=False)
+        )
+        for template_name in ["prediction", "embedding"]:
+            single_input_paths.to_csv(
+                template_home / f"prosst_{template_name}_pdb_template.csv",
+                index=False,
+            )
 
         pd.DataFrame(
             [

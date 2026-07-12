@@ -978,6 +978,9 @@ class ColabProSSTUI:
         mutation_button = self._button(
             "Mutational effect prediction", style="info"
         )
+        embedding_button = self._button(
+            "Extract protein embeddings", style="info"
+        )
         structure_button = self._button(
             "Convert protein structure to ProSST tokens", style="info"
         )
@@ -987,6 +990,9 @@ class ColabProSSTUI:
         )
         mutation_button.on_click(
             lambda _button: self._navigate(self._mutation_page)
+        )
+        embedding_button.on_click(
+            lambda _button: self._navigate(self._embedding_page)
         )
         structure_button.on_click(
             lambda _button: self._navigate(self._structure_page)
@@ -1003,6 +1009,12 @@ class ColabProSSTUI:
                 "Use a trained ProSST checkpoint for protein-level "
                 "classification/regression, residue-level classification, or "
                 "protein-pair classification/regression."
+            ),
+            self._separator(),
+            embedding_button,
+            self._html(
+                "Extract final-layer protein-level vectors, residue-level "
+                "vectors, or both from an official ProSST model."
             ),
             self._separator(),
             mutation_button,
@@ -1132,6 +1144,109 @@ class ColabProSSTUI:
             *csv_input.items,
             *structure_input.items,
             batch_size,
+            download,
+            self._separator(),
+            start_button,
+            output,
+        )
+
+    def _embedding_page(self):
+        self.current_page = self._embedding_page
+        widgets = self.widgets
+        level = widgets.ToggleButtons(
+            options=[
+                ("Protein-level", "protein"),
+                ("Residue-level", "residue"),
+                ("Both", "both"),
+            ],
+            value="protein",
+            description="Embedding level:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
+        )
+        model = self._model_dropdown()
+        csv_input = _UploadField(
+            self,
+            "Protein CSV:",
+            "Path to a CSV with sequence and structure input",
+        )
+        structure_input = _StructureInput(self)
+        batch_size = widgets.Dropdown(
+            options=[1, 2, 4, 8, 16, 32],
+            value=1,
+            description="Batch size:",
+            layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
+        )
+        max_length = widgets.BoundedIntText(
+            value=2046,
+            min=1,
+            max=2046,
+            step=1,
+            description="Maximum residues:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
+        )
+        download = widgets.Checkbox(
+            value=True,
+            description="Download embedding ZIP",
+            style={"description_width": "initial"},
+        )
+        start_button = self._button("Start embedding extraction", style="info")
+        output = self._output()
+
+        def extract():
+            if not csv_input.value:
+                raise ValueError("Upload a protein CSV or enter its path.")
+            model_spec = get_prosst_model_spec(model.value)
+            structure_input.validate(
+                csv_input.value,
+                structure_vocab_size=model_spec.structure_vocab_size,
+            )
+            print("Extracting ProSST embeddings...")
+            result = self.workflow.extract_embeddings(
+                input_csv=csv_input.value,
+                use_last_structure_tokens=structure_input.reuse_latest,
+                structure_zip=structure_input.structure_zip,
+                model_path=model.value,
+                structure_vocab_size=model_spec.structure_vocab_size,
+                level=level.value,
+                batch_size=batch_size.value,
+                max_length=max_length.value,
+                download=download.value,
+            )
+            self.latest_model_path = model.value
+            if "protein_embeddings" in result:
+                print(
+                    "protein embedding shape:",
+                    tuple(result["protein_embeddings"].shape),
+                )
+            if "residue_embeddings" in result:
+                residue_shapes = [
+                    tuple(embedding.shape)
+                    for embedding in result["residue_embeddings"]
+                ]
+                print("residue embedding shapes:", residue_shapes)
+            print("embedding package:", result["archive_path"])
+
+        start_button.on_click(
+            lambda _button: self._start_task(start_button, output, extract)
+        )
+        self.display(
+            self._heading("Extract ProSST embeddings"),
+            self._html(
+                "The final ProSST hidden layer is used. Protein-level output "
+                "has shape <code>[N, D]</code>. Residue-level output is a list "
+                "of <code>[L, D]</code> tensors, one per protein. CLS, EOS, and "
+                "padding tokens are excluded."
+            ),
+            self._heading("Embedding setting:", level=3),
+            level,
+            model,
+            self._heading("Input proteins:", level=3),
+            *csv_input.items,
+            *structure_input.items,
+            batch_size,
+            max_length,
             download,
             self._separator(),
             start_button,

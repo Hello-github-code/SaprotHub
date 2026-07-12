@@ -1481,6 +1481,60 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
                     ],
                 )
 
+    def test_saturation_workflow_packages_tables_and_heatmap(self):
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            input_csv = root / "saturation-input.csv"
+            self.pd.DataFrame(
+                [{"sequence": "ACD", "structure_tokens": "0 1 2"}]
+            ).to_csv(input_csv, index=False)
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+            captured = {}
+
+            def score(**kwargs):
+                captured.update(kwargs)
+                Path(kwargs["output_csv"]).write_text(
+                    "mutation,score\nA1C,1.0\n",
+                    encoding="utf-8",
+                )
+                Path(kwargs["output_matrix_csv"]).write_text(
+                    "mutant,A1\nC,1.0\n",
+                    encoding="utf-8",
+                )
+                Path(kwargs["output_heatmap_png"]).write_bytes(b"png")
+                return {"score_table": self.pd.DataFrame()}
+
+            with patch(
+                "saprot.utils.colab_prosst_workflow."
+                "score_saturation_mutagenesis",
+                side_effect=score,
+            ):
+                result = workflow.run_saturation_mutagenesis(
+                    input_csv=str(input_csv),
+                    model_path="AI4Protein/ProSST-20",
+                    download=False,
+                )
+
+            self.assertEqual(captured["structure_vocab_size"], 20)
+            archive_path = Path(result["archive_path"])
+            with zipfile.ZipFile(archive_path) as archive:
+                self.assertEqual(
+                    sorted(archive.namelist()),
+                    [
+                        "prosst_saturation_heatmap.png",
+                        "prosst_saturation_matrix.csv",
+                        "prosst_saturation_scores.csv",
+                    ],
+                )
+
     def test_csv_templates_follow_the_selected_model_vocabulary(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)

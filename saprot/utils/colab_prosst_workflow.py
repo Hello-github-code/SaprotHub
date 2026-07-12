@@ -18,6 +18,9 @@ from saprot.data.prosst_labels import (
     validate_residue_labels,
 )
 from saprot.scripts.mutation_zeroshot_prosst import score_mutants
+from saprot.scripts.saturation_mutagenesis_prosst import (
+    score_saturation_mutagenesis,
+)
 from saprot.scripts.extract_prosst_embeddings import (
     EMBEDDING_LEVELS,
     extract_embeddings as extract_prosst_embeddings,
@@ -786,6 +789,79 @@ class ColabProSSTWorkflow:
         if download:
             self._download(output_path)
         return df
+
+    def run_saturation_mutagenesis(
+        self,
+        input_csv: str,
+        upload_csv: bool = False,
+        use_last_structure_tokens: bool = False,
+        structure_zip: str = "",
+        upload_structure_zip: bool = False,
+        model_path: str = MODEL_PROSST_2048,
+        structure_vocab_size: Optional[int] = None,
+        output_csv: Optional[str] = None,
+        output_matrix_csv: Optional[str] = None,
+        output_heatmap_png: Optional[str] = None,
+        download: bool = True,
+    ) -> dict:
+        structure_vocab_size = resolve_structure_vocab_size(
+            model_path,
+            structure_vocab_size,
+        )
+        input_csv = self._prepare_input_csv(
+            input_csv,
+            upload_csv,
+            use_last_structure_tokens,
+            "saturation",
+            structure_vocab_size,
+        )
+        structure_base_dir = self.maybe_extract_asset_zip(
+            structure_zip,
+            upload_structure_zip,
+        )
+        score_path = (
+            Path(output_csv)
+            if output_csv
+            else self.output_dir / "prosst_saturation_scores.csv"
+        )
+        matrix_path = (
+            Path(output_matrix_csv)
+            if output_matrix_csv
+            else self.output_dir / "prosst_saturation_matrix.csv"
+        )
+        heatmap_path = (
+            Path(output_heatmap_png)
+            if output_heatmap_png
+            else self.output_dir / "prosst_saturation_heatmap.png"
+        )
+        result = score_saturation_mutagenesis(
+            input_csv=input_csv,
+            output_csv=str(score_path),
+            output_matrix_csv=str(matrix_path),
+            output_heatmap_png=str(heatmap_path),
+            model_path=model_path,
+            cache_dir=str(self.cache_dir),
+            structure_vocab_size=structure_vocab_size,
+            structure_base_dir=structure_base_dir,
+        )
+
+        archive_path = self.output_dir / "prosst_saturation_mutagenesis.zip"
+        with zipfile.ZipFile(
+            archive_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as archive:
+            for path in [score_path, matrix_path, heatmap_path]:
+                archive.write(path, arcname=path.name)
+        result["archive_path"] = str(archive_path)
+
+        print("saved saturation scores:", score_path)
+        print("saved saturation matrix:", matrix_path)
+        print("saved saturation heatmap:", heatmap_path)
+        print("saved saturation package:", archive_path)
+        if download:
+            self._download(archive_path)
+        return result
 
     def extract_embeddings(
         self,

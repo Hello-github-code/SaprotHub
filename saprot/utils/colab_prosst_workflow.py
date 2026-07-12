@@ -346,6 +346,76 @@ class ColabProSSTWorkflow:
             ]
         ).to_csv(template_home / "prosst_regression_pdb_template.csv", index=False)
 
+        pair_examples = [
+            {
+                "sequence_1": "ACD",
+                "sequence_2": "AC",
+                "stage": "train",
+                "structure_tokens_1": "0 1 2",
+                "structure_tokens_2": "3 4",
+                "pdb_path_1": "train_protein_1.pdb",
+                "pdb_path_2": "train_protein_2.pdb",
+            },
+            {
+                "sequence_1": "ACE",
+                "sequence_2": "AD",
+                "stage": "valid",
+                "structure_tokens_1": "0 1 3",
+                "structure_tokens_2": "0 2",
+                "pdb_path_1": "valid_protein_1.pdb",
+                "pdb_path_2": "valid_protein_2.pdb",
+            },
+            {
+                "sequence_1": "ACF",
+                "sequence_2": "AE",
+                "stage": "test",
+                "structure_tokens_1": "0 1 4",
+                "structure_tokens_2": "0 3",
+                "pdb_path_1": "test_protein_1.pdb",
+                "pdb_path_2": "test_protein_2.pdb",
+            },
+        ]
+        pair_labels = {
+            "pair_classification": [0, 1, 0],
+            "pair_regression": [0.5, 0.2, 0.8],
+        }
+        for task_type, labels in pair_labels.items():
+            token_rows = []
+            path_rows = []
+            for example, label in zip(pair_examples, labels):
+                common = {
+                    "sequence_1": example["sequence_1"],
+                    "sequence_2": example["sequence_2"],
+                    "label": label,
+                    "stage": example["stage"],
+                }
+                token_rows.append(
+                    {
+                        **common,
+                        "structure_tokens_1": example["structure_tokens_1"],
+                        "structure_tokens_2": example["structure_tokens_2"],
+                        "structure_vocab_size": structure_vocab_size,
+                    }
+                )
+                path_rows.append(
+                    {
+                        **common,
+                        "pdb_path_1": example["pdb_path_1"],
+                        "chain_id_1": "",
+                        "pdb_path_2": example["pdb_path_2"],
+                        "chain_id_2": "",
+                    }
+                )
+
+            pd.DataFrame(token_rows).to_csv(
+                template_home / f"prosst_{task_type}_template.csv",
+                index=False,
+            )
+            pd.DataFrame(path_rows).to_csv(
+                template_home / f"prosst_{task_type}_pdb_template.csv",
+                index=False,
+            )
+
         pd.DataFrame(
             [
                 {
@@ -367,6 +437,38 @@ class ColabProSSTWorkflow:
                 {"sequence": "ACE", "pdb_path": "protein_2.pdb", "chain_id": ""},
             ]
         ).to_csv(template_home / "prosst_prediction_pdb_template.csv", index=False)
+
+        pd.DataFrame(
+            [
+                {
+                    "sequence_1": example["sequence_1"],
+                    "sequence_2": example["sequence_2"],
+                    "structure_tokens_1": example["structure_tokens_1"],
+                    "structure_tokens_2": example["structure_tokens_2"],
+                    "structure_vocab_size": structure_vocab_size,
+                }
+                for example in pair_examples[:2]
+            ]
+        ).to_csv(
+            template_home / "prosst_pair_prediction_template.csv",
+            index=False,
+        )
+        pd.DataFrame(
+            [
+                {
+                    "sequence_1": example["sequence_1"],
+                    "sequence_2": example["sequence_2"],
+                    "pdb_path_1": example["pdb_path_1"],
+                    "chain_id_1": "",
+                    "pdb_path_2": example["pdb_path_2"],
+                    "chain_id_2": "",
+                }
+                for example in pair_examples[:2]
+            ]
+        ).to_csv(
+            template_home / "prosst_pair_prediction_pdb_template.csv",
+            index=False,
+        )
 
         template_zip = template_home / "prosst_csv_templates.zip"
         with zipfile.ZipFile(template_zip, "w") as archive:

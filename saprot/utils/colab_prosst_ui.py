@@ -198,6 +198,7 @@ class _StructureInput:
 
     def __init__(self, ui):
         self.ui = ui
+        self.pair_mode = False
         widgets = ui.widgets
         default_mode = (
             self.REUSE
@@ -205,11 +206,7 @@ class _StructureInput:
             else self.TOKENS
         )
         self.mode = widgets.RadioButtons(
-            options=[
-                ("CSV contains structure_tokens", self.TOKENS),
-                ("Reuse latest structure conversion", self.REUSE),
-                ("CSV contains structure file paths", self.PATHS),
-            ],
+            options=self._mode_options(),
             value=default_mode,
             description="Structure input:",
             style={"description_width": "initial"},
@@ -229,6 +226,33 @@ class _StructureInput:
         )
         self.items = [self.mode, self.hint, *self.zip_upload.items]
         self.mode.observe(self._update, names="value")
+        self._update({"new": self.mode.value})
+
+    def _mode_options(self):
+        if self.pair_mode:
+            return [
+                ("CSV contains structure tokens for both proteins", self.TOKENS),
+                ("CSV contains structure file paths for both proteins", self.PATHS),
+            ]
+        return [
+            ("CSV contains structure_tokens", self.TOKENS),
+            ("Reuse latest structure conversion", self.REUSE),
+            ("CSV contains structure file paths", self.PATHS),
+        ]
+
+    def set_pair_mode(self, enabled):
+        enabled = bool(enabled)
+        if enabled == self.pair_mode:
+            self._update({"new": self.mode.value})
+            return
+
+        current_mode = self.mode.value
+        self.pair_mode = enabled
+        self.mode.options = self._mode_options()
+        valid_modes = {value for _label, value in self.mode.options}
+        self.mode.value = (
+            current_mode if current_mode in valid_modes else self.TOKENS
+        )
         self._update({"new": self.mode.value})
 
     @property
@@ -253,13 +277,37 @@ class _StructureInput:
             except StopIteration as exc:
                 raise ValueError("The uploaded CSV is empty.") from exc
 
-        if self.mode.value == self.TOKENS and "structure_tokens" not in columns:
+        if self.pair_mode and self.mode.value == self.TOKENS:
+            required = {"structure_tokens_1", "structure_tokens_2"}
+            missing = sorted(required - columns)
+            if missing:
+                raise ValueError(
+                    "Protein-pair token input requires both "
+                    "structure_tokens_1 and structure_tokens_2. Missing: "
+                    f"{missing}."
+                )
+        elif self.mode.value == self.TOKENS and "structure_tokens" not in columns:
             raise ValueError(
                 "You selected `CSV contains structure_tokens`, but the uploaded "
                 "CSV has no structure_tokens column. Choose another structure "
                 "input mode or add that column."
             )
-        if self.mode.value == self.PATHS and not columns.intersection(
+
+        if self.pair_mode and self.mode.value == self.PATHS:
+            missing_partners = [
+                index
+                for index in (1, 2)
+                if not columns.intersection(
+                    {f"pdb_path_{index}", f"structure_path_{index}"}
+                )
+            ]
+            if missing_partners:
+                raise ValueError(
+                    "Protein-pair path input requires pdb_path_1/"
+                    "structure_path_1 and pdb_path_2/structure_path_2. Missing "
+                    f"path input for protein(s): {missing_partners}."
+                )
+        elif self.mode.value == self.PATHS and not columns.intersection(
             {"pdb_path", "structure_path"}
         ):
             raise ValueError(
@@ -293,7 +341,22 @@ class _StructureInput:
         mode = change["new"]
         self.zip_upload.set_visible(mode == self.PATHS)
 
-        if mode == self.TOKENS:
+        if self.pair_mode and mode == self.TOKENS:
+            self.hint.value = (
+                "Every CSV row must contain <code>structure_tokens_1</code> "
+                "and <code>structure_tokens_2</code>, aligned with "
+                "<code>sequence_1</code> and <code>sequence_2</code>. Upload "
+                "only the CSV; a Structure ZIP is not needed. A single latest "
+                "structure conversion cannot be reused for a protein pair."
+            )
+        elif self.pair_mode and mode == self.PATHS:
+            self.hint.value = (
+                "Every CSV row must contain one path for each protein: "
+                "<code>pdb_path_1</code>/<code>structure_path_1</code> and "
+                "<code>pdb_path_2</code>/<code>structure_path_2</code>. Upload "
+                "one ZIP containing all relative-path structure files."
+            )
+        elif mode == self.TOKENS:
             self.hint.value = (
                 "Every CSV row must contain <code>structure_tokens</code>. "
                 "Upload only the CSV; a Structure ZIP is not needed."
@@ -404,6 +467,8 @@ class ColabProSSTUI:
                 ("Protein-level Classification", "classification"),
                 ("Protein-level Regression", "regression"),
                 ("Residue-level Classification", "token_classification"),
+                ("Protein-pair Classification", "pair_classification"),
+                ("Protein-pair Regression", "pair_regression"),
             ],
             value=value,
             description="Task type:",
@@ -425,6 +490,18 @@ class ColabProSSTUI:
                 "each amino-acid residue, such as a binding-site or secondary-"
                 "structure label.</font>"
             )
+        if task_type == "pair_classification":
+            return (
+                "<font color='red'>What is <b>Protein-pair "
+                "Classification:</b> Given two proteins, predict a category "
+                "for their relationship, such as whether they interact.</font>"
+            )
+        if task_type == "pair_regression":
+            return (
+                "<font color='red'>What is <b>Protein-pair Regression:</b> "
+                "Given two proteins, predict a continuous score for their "
+                "relationship, such as interaction strength or affinity.</font>"
+            )
         return (
             "<font color='red'>What is <b>Protein-level Regression:</b> Given a "
             "protein, you want to predict a score about its property such as "
@@ -433,7 +510,15 @@ class ColabProSSTUI:
 
     @staticmethod
     def _uses_category_count(task_type):
-        return task_type in {"classification", "token_classification"}
+        return task_type in {
+            "classification",
+            "token_classification",
+            "pair_classification",
+        }
+
+    @staticmethod
+    def _is_pair_task(task_type):
+        return task_type in {"pair_classification", "pair_regression"}
 
     @staticmethod
     def _training_dataset_help(task_type):
@@ -444,6 +529,13 @@ class ColabProSSTUI:
                 "<code>residue_labels</code> must contain one integer category "
                 "per residue; use <code>-100</code> only to ignore an unlabeled "
                 "residue. Then choose one structure input method."
+            )
+        if ColabProSSTUI._is_pair_task(task_type):
+            return (
+                "The CSV must contain <code>sequence_1</code>, "
+                "<code>sequence_2</code>, <code>label</code>, and "
+                "<code>stage</code>. Provide matching structure inputs for "
+                "both proteins using the selected method."
             )
         return (
             "The CSV must contain <code>sequence</code>, <code>label</code>, "
@@ -459,7 +551,7 @@ class ColabProSSTUI:
                 "category. Each cell is a space-separated list aligned "
                 "one-to-one with the input residues."
             )
-        if task_type == "classification":
+        if task_type in {"classification", "pair_classification"}:
             return (
                 "The prediction CSV contains the predicted category in "
                 "<code>pred</code> and one probability column per category."
@@ -486,7 +578,10 @@ class ColabProSSTUI:
         return self._html(
             "<h3>Prepare sequence and structure inputs</h3>"
             "<p>Every CSV row needs an amino-acid sequence and matching ProSST "
-            "structure tokens. Choose one of these input methods:</p>"
+            "structure tokens. Protein-pair tasks instead need "
+            "<code>sequence_1</code>/<code>sequence_2</code> and matching "
+            "structure inputs for both proteins. Choose one of these input "
+            "methods:</p>"
             "<ol>"
             "<li><b>Recommended for a first run:</b> open <b>Prediction &gt; "
             "Convert protein structure to ProSST tokens</b>, select a ProSST "
@@ -505,7 +600,10 @@ class ColabProSSTUI:
             "<code>structure_path</code>. Upload the corresponding Structure ZIP "
             "when these values are filenames or relative paths. Files already "
             "available at absolute Colab paths do not need a ZIP.</li>"
-            "</ol>",
+            "</ol>"
+            "<p><b>Protein-pair tasks:</b> provide both partners in every row. "
+            "The single latest structure conversion cannot be reused for a "
+            "pair.</p>",
             width="100%",
             max_width=self.GUIDE_WIDTH,
             overflow="visible",
@@ -755,12 +853,23 @@ class ColabProSSTUI:
             )
             task_intro.value = self._task_intro(selected_task)
             dataset_help.value = self._training_dataset_help(selected_task)
-            csv_input.path.placeholder = (
-                "Path to a CSV with sequence, residue_labels, stage, and "
-                "structure input"
-                if selected_task == "token_classification"
-                else "Path to a CSV with sequence, label, stage, and structure input"
-            )
+            structure_input.set_pair_mode(self._is_pair_task(selected_task))
+            if selected_task == "token_classification":
+                placeholder = (
+                    "Path to a CSV with sequence, residue_labels, stage, and "
+                    "structure input"
+                )
+            elif self._is_pair_task(selected_task):
+                placeholder = (
+                    "Path to a CSV with sequence_1, sequence_2, label, stage, "
+                    "and two structure inputs"
+                )
+            else:
+                placeholder = (
+                    "Path to a CSV with sequence, label, stage, and structure "
+                    "input"
+                )
+            csv_input.path.placeholder = placeholder
 
         def toggle_advanced(_button):
             show = freeze_backbone.layout.display == "none"
@@ -823,6 +932,7 @@ class ColabProSSTUI:
             )
             finish_hint.layout.display = None
 
+        update_task({"new": task_type.value})
         task_type.observe(update_task, names="value")
         template_button.on_click(
             lambda button: self._download_templates(button, model.value)
@@ -891,7 +1001,8 @@ class ColabProSSTUI:
             property_button,
             self._html(
                 "Use a trained ProSST checkpoint for protein-level "
-                "classification/regression or residue-level classification."
+                "classification/regression, residue-level classification, or "
+                "protein-pair classification/regression."
             ),
             self._separator(),
             mutation_button,
@@ -942,6 +1053,9 @@ class ColabProSSTUI:
             "Path to a CSV with sequence and structure input",
         )
         structure_input = _StructureInput(self)
+        structure_input.set_pair_mode(
+            self._is_pair_task(self.latest_task_type)
+        )
         batch_size = widgets.Dropdown(
             options=[1, 2, 4, 8, 16, 32],
             value=1,
@@ -957,11 +1071,19 @@ class ColabProSSTUI:
         output = self._output()
 
         def update_task(change):
+            selected_task = change["new"]
             num_labels.layout.display = (
-                None if self._uses_category_count(change["new"]) else "none"
+                None if self._uses_category_count(selected_task) else "none"
             )
-            task_intro.value = self._task_intro(change["new"])
-            prediction_help.value = self._prediction_output_help(change["new"])
+            task_intro.value = self._task_intro(selected_task)
+            prediction_help.value = self._prediction_output_help(selected_task)
+            structure_input.set_pair_mode(self._is_pair_task(selected_task))
+            csv_input.path.placeholder = (
+                "Path to a CSV with sequence_1, sequence_2, and two structure "
+                "inputs"
+                if self._is_pair_task(selected_task)
+                else "Path to a CSV with sequence and structure input"
+            )
 
         def predict():
             if not checkpoint.value:
@@ -991,12 +1113,13 @@ class ColabProSSTUI:
             self.latest_num_labels = num_labels.value
             self.display(result.head())
 
+        update_task({"new": task_type.value})
         task_type.observe(update_task, names="value")
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, predict)
         )
         self.display(
-            self._heading("Protein property prediction"),
+            self._heading("Protein and protein-pair property prediction"),
             self._heading("Choose the prediction task:", level=3),
             task_type,
             num_labels,

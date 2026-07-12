@@ -64,6 +64,7 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("sequence-structure disentangled attention", introduction)
         self.assertIn("PDB/mmCIF structure quantization", introduction)
         self.assertIn("residue-level classification", introduction)
+        self.assertIn("protein-pair classification and regression", introduction)
         self.assertIn("ColabSaprot", introduction)
         self.assertIn("ColabSeprot", introduction)
         self.assertIn("ColabESMC", introduction)
@@ -1446,6 +1447,17 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
             path_template = self.pd.read_csv(
                 root / "templates" / "prosst_classification_pdb_template.csv"
             )
+            pair_template = self.pd.read_csv(
+                root / "templates" / "prosst_pair_classification_template.csv"
+            )
+            pair_path_template = self.pd.read_csv(
+                root
+                / "templates"
+                / "prosst_pair_regression_pdb_template.csv"
+            )
+            pair_prediction = self.pd.read_csv(
+                root / "templates" / "prosst_pair_prediction_template.csv"
+            )
             self.assertEqual(
                 token_template["structure_vocab_size"].unique().tolist(),
                 [20],
@@ -1459,6 +1471,24 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
                 "0 1 0",
             )
             self.assertNotIn("structure_vocab_size", path_template.columns)
+            self.assertEqual(
+                pair_template["structure_vocab_size"].unique().tolist(),
+                [20],
+            )
+            self.assertTrue(
+                {
+                    "sequence_1",
+                    "sequence_2",
+                    "structure_tokens_1",
+                    "structure_tokens_2",
+                }.issubset(pair_template.columns)
+            )
+            self.assertTrue(
+                {"pdb_path_1", "pdb_path_2"}.issubset(
+                    pair_path_template.columns
+                )
+            )
+            self.assertNotIn("label", pair_prediction.columns)
 
     def test_reusing_latest_conversion_overrides_other_structure_sources(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
@@ -2069,6 +2099,8 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         self.assertIn("CSV already contains", input_guide.value)
         self.assertIn("structure_tokens", input_guide.value)
         self.assertIn("absolute Colab paths", input_guide.value)
+        self.assertIn("Protein-pair tasks", input_guide.value)
+        self.assertIn("cannot be reused for a pair", input_guide.value)
 
         model_dropdown = ui._model_dropdown()
         self.assertFalse(model_dropdown.disabled)
@@ -2087,6 +2119,14 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             task_dropdown.options,
         )
         self.assertIn(
+            ("Protein-pair Classification", "pair_classification"),
+            task_dropdown.options,
+        )
+        self.assertIn(
+            ("Protein-pair Regression", "pair_regression"),
+            task_dropdown.options,
+        )
+        self.assertIn(
             "one category for each amino-acid residue",
             ui._task_intro("token_classification"),
         )
@@ -2098,6 +2138,16 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             "aligned one-to-one with the input residues",
             ui._prediction_output_help("token_classification"),
         )
+        self.assertIn(
+            "whether they interact",
+            ui._task_intro("pair_classification"),
+        )
+        self.assertIn(
+            "sequence_1",
+            ui._training_dataset_help("pair_regression"),
+        )
+        self.assertTrue(ui._uses_category_count("pair_classification"))
+        self.assertFalse(ui._uses_category_count("pair_regression"))
 
         structure_input = module._StructureInput(ui)
         self.assertEqual(structure_input.mode.value, structure_input.TOKENS)
@@ -2118,6 +2168,24 @@ class ColabProSSTWidgetTest(unittest.TestCase):
                 "sequence,pdb_path\nACD,protein.pdb\n",
                 encoding="utf-8",
             )
+            pair_tokens_csv = root / "pair-tokens.csv"
+            pair_tokens_csv.write_text(
+                "sequence_1,sequence_2,structure_tokens_1,structure_tokens_2\n"
+                "ACD,AC,\"1 2 3\",\"4 5\"\n",
+                encoding="utf-8",
+            )
+            incomplete_pair_csv = root / "incomplete-pair.csv"
+            incomplete_pair_csv.write_text(
+                "sequence_1,sequence_2,structure_tokens_1\n"
+                "ACD,AC,\"1 2 3\"\n",
+                encoding="utf-8",
+            )
+            pair_paths_csv = root / "pair-paths.csv"
+            pair_paths_csv.write_text(
+                "sequence_1,sequence_2,pdb_path_1,structure_path_2\n"
+                "ACD,AC,protein_1.pdb,protein_2.cif\n",
+                encoding="utf-8",
+            )
 
             structure_input.validate(tokens_csv)
             with self.assertRaisesRegex(ValueError, "no structure_tokens column"):
@@ -2131,6 +2199,31 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             structure_input.mode.value = structure_input.REUSE
             with self.assertRaisesRegex(ValueError, "No structure conversion"):
                 structure_input.validate(sequence_csv)
+
+            structure_input.set_pair_mode(True)
+            self.assertEqual(structure_input.mode.value, structure_input.TOKENS)
+            self.assertNotIn(
+                structure_input.REUSE,
+                [value for _label, value in structure_input.mode.options],
+            )
+            self.assertIn("structure_tokens_1", structure_input.hint.value)
+            structure_input.validate(pair_tokens_csv)
+            with self.assertRaisesRegex(ValueError, "structure_tokens_2"):
+                structure_input.validate(incomplete_pair_csv)
+
+            structure_input.mode.value = structure_input.PATHS
+            structure_input.validate(pair_paths_csv)
+            with self.assertRaisesRegex(
+                ValueError,
+                r"protein\(s\): \[1, 2\]",
+            ):
+                structure_input.validate(paths_csv)
+
+            structure_input.set_pair_mode(False)
+            self.assertIn(
+                structure_input.REUSE,
+                [value for _label, value in structure_input.mode.options],
+            )
 
         structure_input.mode.value = structure_input.PATHS
         self.assertIsNone(structure_input.zip_upload.path.layout.display)
@@ -2226,6 +2319,11 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             for item in training_items
             if getattr(item, "description", "") == "Training CSV:"
         )
+        training_structure = next(
+            item
+            for item in training_items
+            if getattr(item, "description", "") == "Structure input:"
+        )
         training_task.value = "token_classification"
         self.assertIsNone(category_count.layout.display)
         self.assertIn("residue_labels", training_csv.placeholder)
@@ -2236,6 +2334,15 @@ class ColabProSSTWidgetTest(unittest.TestCase):
                 for item in training_items
             )
         )
+        training_task.value = "pair_classification"
+        self.assertIsNone(category_count.layout.display)
+        self.assertIn("sequence_1", training_csv.placeholder)
+        self.assertNotIn(
+            "reuse",
+            [value for _label, value in training_structure.options],
+        )
+        training_task.value = "pair_regression"
+        self.assertEqual(category_count.layout.display, "none")
 
         rendered.clear()
         ui.latest_task_type = "token_classification"
@@ -2252,6 +2359,16 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             for item in prediction_items
             if getattr(item, "description", "") == "Number of categories:"
         )
+        prediction_csv = next(
+            item
+            for item in prediction_items
+            if getattr(item, "description", "") == "Prediction CSV:"
+        )
+        prediction_structure = next(
+            item
+            for item in prediction_items
+            if getattr(item, "description", "") == "Structure input:"
+        )
         self.assertEqual(prediction_task.value, "token_classification")
         self.assertEqual(prediction_categories.value, 3)
         self.assertTrue(
@@ -2265,6 +2382,15 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         self.assertEqual(prediction_categories.layout.display, "none")
         prediction_task.value = "token_classification"
         self.assertIsNone(prediction_categories.layout.display)
+        prediction_task.value = "pair_classification"
+        self.assertIsNone(prediction_categories.layout.display)
+        self.assertIn("sequence_1", prediction_csv.placeholder)
+        self.assertNotIn(
+            "reuse",
+            [value for _label, value in prediction_structure.options],
+        )
+        prediction_task.value = "pair_regression"
+        self.assertEqual(prediction_categories.layout.display, "none")
 
         task_button = ui._button("Run test task")
         task_output = ui._output()

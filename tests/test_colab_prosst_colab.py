@@ -69,6 +69,10 @@ class ColabProSSTNotebookTest(unittest.TestCase):
             "protein-level and residue-level embedding extraction",
             introduction,
         )
+        self.assertIn(
+            "single-site saturation mutagenesis with heatmaps",
+            introduction,
+        )
         self.assertIn("ColabSaprot", introduction)
         self.assertIn("ColabSeprot", introduction)
         self.assertIn("ColabESMC", introduction)
@@ -211,7 +215,7 @@ class ColabProSSTNotebookTest(unittest.TestCase):
     def test_task_pages_require_an_explicit_structure_input_mode(self):
         source = UI_PATH.read_text(encoding="utf-8")
 
-        self.assertEqual(source.count("structure_input = _StructureInput(self)"), 4)
+        self.assertEqual(source.count("structure_input = _StructureInput(self)"), 5)
         self.assertIn("CSV contains structure_tokens", source)
         self.assertIn("Reuse latest structure conversion", source)
         self.assertIn("CSV contains structure file paths", source)
@@ -1574,6 +1578,9 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
             embedding_template = self.pd.read_csv(
                 root / "templates" / "prosst_embedding_template.csv"
             )
+            saturation_template = self.pd.read_csv(
+                root / "templates" / "prosst_saturation_template.csv"
+            )
             self.assertEqual(
                 token_template["structure_vocab_size"].unique().tolist(),
                 [20],
@@ -1616,6 +1623,11 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
             self.assertEqual(
                 embedding_template["structure_vocab_size"].unique().tolist(),
                 [20],
+            )
+            self.assertEqual(len(saturation_template), 1)
+            self.assertEqual(
+                saturation_template.columns.tolist(),
+                ["sequence", "structure_tokens", "structure_vocab_size"],
             )
 
     def test_reusing_latest_conversion_overrides_other_structure_sources(self):
@@ -2723,6 +2735,7 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             ui._prediction_menu_page,
             ui._property_prediction_page,
             ui._embedding_page,
+            ui._saturation_page,
             ui._mutation_page,
             ui._structure_page,
             ui._share_page,
@@ -2740,6 +2753,13 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             any(
                 getattr(item, "description", "")
                 == "Extract protein embeddings"
+                for item in prediction_menu_items
+            )
+        )
+        self.assertTrue(
+            any(
+                getattr(item, "description", "")
+                == "Single-site saturation mutagenesis"
                 for item in prediction_menu_items
             )
         )
@@ -2765,6 +2785,25 @@ class ColabProSSTWidgetTest(unittest.TestCase):
                 "[L, D]" in str(getattr(item, "value", ""))
                 and "CLS, EOS, and padding" in str(getattr(item, "value", ""))
                 for item in embedding_items
+            )
+        )
+
+        rendered.clear()
+        ui._saturation_page()
+        saturation_items = rendered[-1]
+        self.assertTrue(
+            any(
+                "exactly one protein row"
+                in str(getattr(item, "value", ""))
+                and "20 x L" in str(getattr(item, "value", ""))
+                for item in saturation_items
+            )
+        )
+        self.assertTrue(
+            any(
+                getattr(item, "description", "")
+                == "Download saturation ZIP"
+                for item in saturation_items
             )
         )
 

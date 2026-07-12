@@ -405,7 +405,7 @@ class ColabProSSTUI:
     def __init__(self, workflow):
         try:
             import ipywidgets
-            from IPython.display import clear_output, display
+            from IPython.display import Image, clear_output, display
         except Exception as exc:
             raise RuntimeError(
                 "ColabProSSTUI requires ipywidgets and an IPython notebook runtime."
@@ -413,6 +413,7 @@ class ColabProSSTUI:
 
         self.widgets = ipywidgets
         self.display = display
+        self.Image = Image
         self.clear_output = clear_output
         self.workflow = workflow
         self.current_page = None
@@ -978,6 +979,9 @@ class ColabProSSTUI:
         mutation_button = self._button(
             "Mutational effect prediction", style="info"
         )
+        saturation_button = self._button(
+            "Single-site saturation mutagenesis", style="info"
+        )
         embedding_button = self._button(
             "Extract protein embeddings", style="info"
         )
@@ -990,6 +994,9 @@ class ColabProSSTUI:
         )
         mutation_button.on_click(
             lambda _button: self._navigate(self._mutation_page)
+        )
+        saturation_button.on_click(
+            lambda _button: self._navigate(self._saturation_page)
         )
         embedding_button.on_click(
             lambda _button: self._navigate(self._embedding_page)
@@ -1021,6 +1028,12 @@ class ColabProSSTUI:
             self._html(
                 "Use official ProSST masked-language-model scores for zero-shot "
                 "single-site or multi-site mutation effects."
+            ),
+            self._separator(),
+            saturation_button,
+            self._html(
+                "Score all 20 amino acids at every position and generate a "
+                "20-by-length matrix plus a zero-centered heatmap."
             ),
             self._separator(),
             structure_button,
@@ -1247,6 +1260,73 @@ class ColabProSSTUI:
             *structure_input.items,
             batch_size,
             max_length,
+            download,
+            self._separator(),
+            start_button,
+            output,
+        )
+
+    def _saturation_page(self):
+        self.current_page = self._saturation_page
+        model = self._model_dropdown()
+        csv_input = _UploadField(
+            self,
+            "Protein CSV:",
+            "Path to a one-row CSV with sequence and structure input",
+        )
+        structure_input = _StructureInput(self)
+        download = self.widgets.Checkbox(
+            value=True,
+            description="Download saturation ZIP",
+            style={"description_width": "initial"},
+        )
+        start_button = self._button(
+            "Start saturation mutagenesis",
+            style="info",
+        )
+        output = self._output()
+
+        def predict():
+            if not csv_input.value:
+                raise ValueError("Upload a protein CSV or enter its path.")
+            model_spec = get_prosst_model_spec(model.value)
+            structure_input.validate(
+                csv_input.value,
+                structure_vocab_size=model_spec.structure_vocab_size,
+            )
+            print("Running single-site saturation mutagenesis...")
+            result = self.workflow.run_saturation_mutagenesis(
+                input_csv=csv_input.value,
+                use_last_structure_tokens=structure_input.reuse_latest,
+                structure_zip=structure_input.structure_zip,
+                model_path=model.value,
+                structure_vocab_size=model_spec.structure_vocab_size,
+                download=download.value,
+            )
+            self.latest_model_path = model.value
+            print("scored mutations:", len(result["score_table"]))
+            print("saturation package:", result["archive_path"])
+            self.display(self.Image(filename=result["output_heatmap_png"]))
+            self.display(result["score_table"].head())
+
+        start_button.on_click(
+            lambda _button: self._start_task(start_button, output, predict)
+        )
+        self.display(
+            self._heading("Single-site saturation mutagenesis"),
+            self._html(
+                "Upload a CSV containing <b>exactly one protein row</b>. "
+                "ColabProSST scores all 20 amino acids at every position with "
+                "the official <code>log P(mutant) - log P(wild type)</code> "
+                "formula. The ZIP contains a long score table, a "
+                "<code>20 x L</code> matrix, and a PNG heatmap. WT-to-WT "
+                "entries are zero."
+            ),
+            self._heading("Model setting:", level=3),
+            model,
+            self._heading("Protein input:", level=3),
+            *csv_input.items,
+            *structure_input.items,
             download,
             self._separator(),
             start_button,

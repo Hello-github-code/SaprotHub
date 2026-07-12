@@ -442,6 +442,10 @@ class ColabProSSTWorkflow:
                 template_home / f"prosst_{template_name}_template.csv",
                 index=False,
             )
+        single_input_tokens.iloc[[0]].to_csv(
+            template_home / "prosst_saturation_template.csv",
+            index=False,
+        )
 
         single_input_paths = pd.DataFrame(
             [
@@ -454,6 +458,10 @@ class ColabProSSTWorkflow:
                 template_home / f"prosst_{template_name}_pdb_template.csv",
                 index=False,
             )
+        single_input_paths.iloc[[0]].to_csv(
+            template_home / "prosst_saturation_pdb_template.csv",
+            index=False,
+        )
 
         pd.DataFrame(
             [

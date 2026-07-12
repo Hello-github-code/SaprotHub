@@ -237,6 +237,64 @@ class ColabProSSTWorkflow:
             [
                 {
                     "sequence": "ACD",
+                    "residue_labels": "0 1 0",
+                    "stage": "train",
+                    "structure_tokens": "0 1 2",
+                    "structure_vocab_size": structure_vocab_size,
+                },
+                {
+                    "sequence": "ACE",
+                    "residue_labels": "1 -100 0",
+                    "stage": "valid",
+                    "structure_tokens": "0 1 3",
+                    "structure_vocab_size": structure_vocab_size,
+                },
+                {
+                    "sequence": "ACF",
+                    "residue_labels": "0 1 1",
+                    "stage": "test",
+                    "structure_tokens": "0 1 4",
+                    "structure_vocab_size": structure_vocab_size,
+                },
+            ]
+        ).to_csv(
+            template_home / "prosst_token_classification_template.csv",
+            index=False,
+        )
+
+        pd.DataFrame(
+            [
+                {
+                    "sequence": "ACD",
+                    "residue_labels": "0 1 0",
+                    "stage": "train",
+                    "pdb_path": "train.pdb",
+                    "chain_id": "",
+                },
+                {
+                    "sequence": "ACE",
+                    "residue_labels": "1 -100 0",
+                    "stage": "valid",
+                    "pdb_path": "valid.pdb",
+                    "chain_id": "",
+                },
+                {
+                    "sequence": "ACF",
+                    "residue_labels": "0 1 1",
+                    "stage": "test",
+                    "pdb_path": "test.pdb",
+                    "chain_id": "",
+                },
+            ]
+        ).to_csv(
+            template_home / "prosst_token_classification_pdb_template.csv",
+            index=False,
+        )
+
+        pd.DataFrame(
+            [
+                {
+                    "sequence": "ACD",
                     "label": 0.5,
                     "stage": "train",
                     "structure_tokens": "0 1 2",

@@ -63,6 +63,7 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("quantized structure tokens", introduction)
         self.assertIn("sequence-structure disentangled attention", introduction)
         self.assertIn("PDB/mmCIF structure quantization", introduction)
+        self.assertIn("residue-level classification", introduction)
         self.assertIn("ColabSaprot", introduction)
         self.assertIn("ColabSeprot", introduction)
         self.assertIn("ColabESMC", introduction)
@@ -185,6 +186,7 @@ class ColabProSSTNotebookTest(unittest.TestCase):
             "Learning rate:",
             "Start training",
             "Protein property prediction",
+            "Residue-level Classification",
             "Choose the prediction task:",
             "Start prediction",
             "Mutational effect prediction",
@@ -226,7 +228,9 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         )[0]
         self.assertIn("The training is completed. You can then", training_page)
         self.assertIn("is selected automatically in this session", training_page)
-        self.assertIn("self._task_intro(change[\"new\"])", training_page)
+        self.assertIn("self._task_intro(selected_task)", training_page)
+        self.assertIn("self._training_dataset_help(selected_task)", training_page)
+        self.assertIn("self._uses_category_count(selected_task)", training_page)
 
         mutation_page = source.split("def _mutation_page(self):", 1)[1].split(
             "def _structure_page(self):", 1
@@ -1003,12 +1007,23 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
             token_template = self.pd.read_csv(
                 root / "templates" / "prosst_classification_template.csv"
             )
+            residue_template = self.pd.read_csv(
+                root / "templates" / "prosst_token_classification_template.csv"
+            )
             path_template = self.pd.read_csv(
                 root / "templates" / "prosst_classification_pdb_template.csv"
             )
             self.assertEqual(
                 token_template["structure_vocab_size"].unique().tolist(),
                 [20],
+            )
+            self.assertEqual(
+                residue_template["structure_vocab_size"].unique().tolist(),
+                [20],
+            )
+            self.assertEqual(
+                residue_template.loc[0, "residue_labels"],
+                "0 1 0",
             )
             self.assertNotIn("structure_vocab_size", path_template.columns)
 
@@ -1541,6 +1556,24 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             "AI4Protein/ProSST-2048",
         )
 
+        task_dropdown = ui._task_dropdown()
+        self.assertIn(
+            ("Residue-level Classification", "token_classification"),
+            task_dropdown.options,
+        )
+        self.assertIn(
+            "one category for each amino-acid residue",
+            ui._task_intro("token_classification"),
+        )
+        self.assertIn(
+            "residue_labels",
+            ui._training_dataset_help("token_classification"),
+        )
+        self.assertIn(
+            "aligned one-to-one with the input residues",
+            ui._prediction_output_help("token_classification"),
+        )
+
         structure_input = module._StructureInput(ui)
         self.assertEqual(structure_input.mode.value, structure_input.TOKENS)
         self.assertEqual(structure_input.zip_upload.path.layout.display, "none")
@@ -1649,6 +1682,64 @@ class ColabProSSTWidgetTest(unittest.TestCase):
                 rendered.clear()
                 page()
                 self.assertTrue(rendered)
+
+        rendered.clear()
+        ui._training_page()
+        training_items = rendered[-1]
+        training_task = next(
+            item
+            for item in training_items
+            if getattr(item, "description", "") == "Task type:"
+        )
+        category_count = next(
+            item
+            for item in training_items
+            if getattr(item, "description", "") == "Number of categories:"
+        )
+        training_csv = next(
+            item
+            for item in training_items
+            if getattr(item, "description", "") == "Training CSV:"
+        )
+        training_task.value = "token_classification"
+        self.assertIsNone(category_count.layout.display)
+        self.assertIn("residue_labels", training_csv.placeholder)
+        self.assertTrue(
+            any(
+                "one integer category per residue"
+                in str(getattr(item, "value", ""))
+                for item in training_items
+            )
+        )
+
+        rendered.clear()
+        ui.latest_task_type = "token_classification"
+        ui.latest_num_labels = 3
+        ui._property_prediction_page()
+        prediction_items = rendered[-1]
+        prediction_task = next(
+            item
+            for item in prediction_items
+            if getattr(item, "description", "") == "Task type:"
+        )
+        prediction_categories = next(
+            item
+            for item in prediction_items
+            if getattr(item, "description", "") == "Number of categories:"
+        )
+        self.assertEqual(prediction_task.value, "token_classification")
+        self.assertEqual(prediction_categories.value, 3)
+        self.assertTrue(
+            any(
+                "aligned one-to-one with the input residues"
+                in str(getattr(item, "value", ""))
+                for item in prediction_items
+            )
+        )
+        prediction_task.value = "regression"
+        self.assertEqual(prediction_categories.layout.display, "none")
+        prediction_task.value = "token_classification"
+        self.assertIsNone(prediction_categories.layout.display)
 
         task_button = ui._button("Run test task")
         task_output = ui._output()

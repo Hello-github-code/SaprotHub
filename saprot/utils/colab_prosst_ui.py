@@ -357,6 +357,8 @@ class ColabProSSTUI:
         self.active_thread = None
         self.latest_checkpoint = ""
         self.latest_model_path = DEFAULT_PROSST_MODEL.model_path
+        self.latest_task_type = "classification"
+        self.latest_num_labels = 2
         self._polling = False
         self._build_system_widgets()
 
@@ -396,13 +398,14 @@ class ColabProSSTUI:
             layout=self.widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
         )
 
-    def _task_dropdown(self):
+    def _task_dropdown(self, value="classification"):
         return self.widgets.Dropdown(
             options=[
                 ("Protein-level Classification", "classification"),
                 ("Protein-level Regression", "regression"),
+                ("Residue-level Classification", "token_classification"),
             ],
-            value="classification",
+            value=value,
             description="Task type:",
             layout=self.widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
         )
@@ -415,11 +418,53 @@ class ColabProSSTUI:
                 "Given a protein, you have some categories and you want to "
                 "predict which category the protein belongs to.</font>"
             )
+        if task_type == "token_classification":
+            return (
+                "<font color='red'>What is <b>Residue-level "
+                "Classification:</b> Given a protein, predict one category for "
+                "each amino-acid residue, such as a binding-site or secondary-"
+                "structure label.</font>"
+            )
         return (
             "<font color='red'>What is <b>Protein-level Regression:</b> Given a "
             "protein, you want to predict a score about its property such as "
             "stability or enzyme activity.</font>"
         )
+
+    @staticmethod
+    def _uses_category_count(task_type):
+        return task_type in {"classification", "token_classification"}
+
+    @staticmethod
+    def _training_dataset_help(task_type):
+        if task_type == "token_classification":
+            return (
+                "The CSV must contain <code>sequence</code>, "
+                "<code>residue_labels</code>, and <code>stage</code>. "
+                "<code>residue_labels</code> must contain one integer category "
+                "per residue; use <code>-100</code> only to ignore an unlabeled "
+                "residue. Then choose one structure input method."
+            )
+        return (
+            "The CSV must contain <code>sequence</code>, <code>label</code>, "
+            "and <code>stage</code>. Then choose one structure input method."
+        )
+
+    @staticmethod
+    def _prediction_output_help(task_type):
+        if task_type == "token_classification":
+            return (
+                "The prediction CSV contains <code>predicted_labels</code>, "
+                "<code>confidence</code>, and one <code>prob_*</code> column per "
+                "category. Each cell is a space-separated list aligned "
+                "one-to-one with the input residues."
+            )
+        if task_type == "classification":
+            return (
+                "The prediction CSV contains the predicted category in "
+                "<code>pred</code> and one probability column per category."
+            )
+        return "The prediction CSV contains the predicted value in <code>pred</code>."
 
     def _num_labels(self):
         return self.widgets.BoundedIntText(
@@ -646,6 +691,12 @@ class ColabProSSTUI:
             "Training CSV:",
             "Path to a CSV with sequence, label, stage, and structure input",
         )
+        dataset_help = self._html(
+            self._training_dataset_help("classification"),
+            width="100%",
+            max_width=self.GUIDE_WIDTH,
+            overflow="visible",
+        )
         structure_input = _StructureInput(self)
         template_button = self._button(
             "Download CSV templates", width="220px"
@@ -698,8 +749,18 @@ class ColabProSSTUI:
         )
 
         def update_task(change):
-            num_labels.layout.display = None if change["new"] == "classification" else "none"
-            task_intro.value = self._task_intro(change["new"])
+            selected_task = change["new"]
+            num_labels.layout.display = (
+                None if self._uses_category_count(selected_task) else "none"
+            )
+            task_intro.value = self._task_intro(selected_task)
+            dataset_help.value = self._training_dataset_help(selected_task)
+            csv_input.path.placeholder = (
+                "Path to a CSV with sequence, residue_labels, stage, and "
+                "structure input"
+                if selected_task == "token_classification"
+                else "Path to a CSV with sequence, label, stage, and structure input"
+            )
 
         def toggle_advanced(_button):
             show = freeze_backbone.layout.display == "none"
@@ -742,6 +803,8 @@ class ColabProSSTUI:
             )
             self.latest_checkpoint = result["checkpoint_path"]
             self.latest_model_path = result["model_path"]
+            self.latest_task_type = result["task_type"]
+            self.latest_num_labels = num_labels.value
             print("Training finished.")
             print("Model checkpoint:", result["checkpoint_path"])
             print("Test predictions:", result["test_result_csv"])
@@ -779,10 +842,7 @@ class ColabProSSTUI:
             self._heading("Model setting:", level=3),
             model,
             self._heading("Dataset setting:", level=3),
-            self._html(
-                "The CSV must contain <code>sequence</code>, <code>label</code>, "
-                "and <code>stage</code>. Then choose one structure input method."
-            ),
+            dataset_help,
             *csv_input.items,
             *structure_input.items,
             template_button,
@@ -830,8 +890,8 @@ class ColabProSSTUI:
             self._separator(),
             property_button,
             self._html(
-                "Use a trained ProSST checkpoint for protein-level classification "
-                "or regression."
+                "Use a trained ProSST checkpoint for protein-level "
+                "classification/regression or residue-level classification."
             ),
             self._separator(),
             mutation_button,
@@ -852,10 +912,22 @@ class ColabProSSTUI:
     def _property_prediction_page(self):
         self.current_page = self._property_prediction_page
         widgets = self.widgets
-        task_type = self._task_dropdown()
+        task_type = self._task_dropdown(self.latest_task_type)
         num_labels = self._num_labels()
+        num_labels.value = self.latest_num_labels
+        num_labels.layout.display = (
+            None
+            if self._uses_category_count(self.latest_task_type)
+            else "none"
+        )
         task_intro = self._html(
-            self._task_intro("classification"), width=self.WIDTH
+            self._task_intro(self.latest_task_type), width=self.WIDTH
+        )
+        prediction_help = self._html(
+            self._prediction_output_help(self.latest_task_type),
+            width="100%",
+            max_width=self.GUIDE_WIDTH,
+            overflow="visible",
         )
         model = self._model_dropdown()
         checkpoint = _UploadField(
@@ -885,8 +957,11 @@ class ColabProSSTUI:
         output = self._output()
 
         def update_task(change):
-            num_labels.layout.display = None if change["new"] == "classification" else "none"
+            num_labels.layout.display = (
+                None if self._uses_category_count(change["new"]) else "none"
+            )
             task_intro.value = self._task_intro(change["new"])
+            prediction_help.value = self._prediction_output_help(change["new"])
 
         def predict():
             if not checkpoint.value:
@@ -912,6 +987,8 @@ class ColabProSSTUI:
                 download=download.value,
             )
             self.latest_model_path = model.value
+            self.latest_task_type = task_type.value
+            self.latest_num_labels = num_labels.value
             self.display(result.head())
 
         task_type.observe(update_task, names="value")
@@ -924,6 +1001,7 @@ class ColabProSSTUI:
             task_type,
             num_labels,
             task_intro,
+            prediction_help,
             self._heading("Choose the model for prediction:", level=3),
             model,
             *checkpoint.items,
@@ -1115,8 +1193,14 @@ class ColabProSSTUI:
         )
         checkpoint.value = self.latest_checkpoint
         model = self._model_dropdown()
-        task_type = self._task_dropdown()
+        task_type = self._task_dropdown(self.latest_task_type)
         num_labels = self._num_labels()
+        num_labels.value = self.latest_num_labels
+        num_labels.layout.display = (
+            None
+            if self._uses_category_count(self.latest_task_type)
+            else "none"
+        )
         private = widgets.Checkbox(
             value=False,
             description="Create a private Hugging Face repository",
@@ -1143,7 +1227,9 @@ class ColabProSSTUI:
         output = self._output()
 
         def update_task(change):
-            num_labels.layout.display = None if change["new"] == "classification" else "none"
+            num_labels.layout.display = (
+                None if self._uses_category_count(change["new"]) else "none"
+            )
 
         def upload():
             if not checkpoint.value:

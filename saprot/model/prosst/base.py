@@ -1,6 +1,8 @@
 import os
+import json
 import types
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Dict, Optional
 
 import torch
@@ -74,7 +76,11 @@ class ProSSTBaseModel(AbstractModel):
 
             if i < len(config_list):
                 entry = config_list[i]
-                lora_config_path = getattr(entry, "lora_config_path", entry)
+                lora_config_path = (
+                    entry.get("lora_config_path", entry)
+                    if isinstance(entry, dict)
+                    else getattr(entry, "lora_config_path", entry)
+                )
                 if i == 0:
                     self.model = PeftModel.from_pretrained(
                         self.model,
@@ -372,6 +378,41 @@ class ProSSTBaseModel(AbstractModel):
             pass
 
         self.model.save_pretrained(save_path)
+        metadata = dict(checkpoint_info["colabprosst"])
+        metadata["checkpoint_format"] = "peft_adapter"
+        active_adapter = getattr(self.model, "active_adapter", "default")
+        peft_config = getattr(self.model, "peft_config", {}).get(
+            active_adapter
+        )
+        if peft_config is not None:
+            metadata["lora"] = {
+                "r": int(peft_config.r),
+                "lora_alpha": int(peft_config.lora_alpha),
+                "lora_dropout": float(peft_config.lora_dropout),
+            }
+        metadata_path = Path(save_path) / "colabprosst.json"
+        metadata_path.write_text(
+            json.dumps(metadata, indent=2),
+            encoding="utf-8",
+        )
+
+    def load_lora_adapter(self, adapter_path: str) -> None:
+        if not self.lora_kwargs:
+            raise RuntimeError(
+                "Cannot load a LoRA adapter into a non-PEFT ProSST model."
+            )
+        from peft.utils import load_peft_weights, set_peft_model_state_dict
+
+        active_adapter = getattr(self.model, "active_adapter", "default")
+        adapter_state = load_peft_weights(
+            adapter_path,
+            device=str(self.device),
+        )
+        set_peft_model_state_dict(
+            self.model,
+            adapter_state,
+            adapter_name=active_adapter,
+        )
 
     def output_test_metrics(self, log_dict):
         print("=" * 100)

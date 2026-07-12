@@ -1,4 +1,5 @@
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -70,6 +71,7 @@ SUPPORTED_TASK_TYPES = {
     "regression",
     "pair_regression",
 }
+LORA_METADATA_FILENAME = "colabprosst.json"
 
 
 def _load_model(
@@ -81,11 +83,16 @@ def _load_model(
     device: torch.device,
     load_pretrained: bool = False,
 ):
+    checkpoint = Path(checkpoint_path)
+    is_lora_adapter = checkpoint.is_dir()
+    if is_lora_adapter and not (checkpoint / "adapter_config.json").is_file():
+        raise ValueError(
+            f"LoRA checkpoint directory has no adapter_config.json: {checkpoint}"
+        )
     common_kwargs = {
         "config_path": model_path,
         "structure_vocab_size": structure_vocab_size,
-        "from_checkpoint": checkpoint_path,
-        "load_pretrained": load_pretrained,
+        "load_pretrained": True if is_lora_adapter else load_pretrained,
         "lr_scheduler_kwargs": {
             "class": "ConstantLRScheduler",
             "init_lr": 0.0,
@@ -96,6 +103,16 @@ def _load_model(
             "weight_decay": 0.01,
         },
     }
+    if is_lora_adapter:
+        common_kwargs["lora_kwargs"] = {
+            "is_trainable": False,
+            "num_lora": 1,
+            "config_list": [
+                {"lora_config_path": str(checkpoint)}
+            ],
+        }
+    else:
+        common_kwargs["from_checkpoint"] = checkpoint_path
     if task_type == "classification":
         model = ProSSTClassificationModel(
             num_labels=num_labels,
@@ -130,15 +147,24 @@ def validate_checkpoint_compatibility(
     structure_vocab_size: int,
     num_labels: Optional[int] = None,
 ) -> None:
-    try:
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    except Exception:
-        # The regular model loader will report unreadable or invalid checkpoints.
-        return
-
-    if not isinstance(checkpoint, dict):
-        return
-    metadata = checkpoint.get("colabprosst")
+    checkpoint = Path(checkpoint_path)
+    if checkpoint.is_dir():
+        metadata_path = checkpoint / LORA_METADATA_FILENAME
+        if not metadata_path.is_file():
+            return
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+    else:
+        try:
+            checkpoint_state = torch.load(checkpoint, map_location="cpu")
+        except Exception:
+            # The regular model loader will report unreadable checkpoints.
+            return
+        if not isinstance(checkpoint_state, dict):
+            return
+        metadata = checkpoint_state.get("colabprosst")
     if not isinstance(metadata, dict):
         return
 

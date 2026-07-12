@@ -478,6 +478,54 @@ class ColabProSSTStructureRuntimeTest(unittest.TestCase):
                 },
             )
 
+    def test_lora_adapter_records_its_model_contract(self):
+        import torch
+
+        from saprot.model.prosst.base import ProSSTBaseModel
+
+        class DummyPeftModel(torch.nn.Module):
+            active_adapter = "default"
+            peft_config = {
+                "default": types.SimpleNamespace(
+                    r=4,
+                    lora_alpha=8,
+                    lora_dropout=0.05,
+                )
+            }
+
+            @staticmethod
+            def save_pretrained(path):
+                destination = Path(path)
+                destination.mkdir(parents=True, exist_ok=True)
+                (destination / "adapter_config.json").write_text(
+                    "{}",
+                    encoding="utf-8",
+                )
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            adapter_path = Path(temporary_dir) / "adapter"
+            model = object.__new__(ProSSTBaseModel)
+            torch.nn.Module.__init__(model)
+            model.model = DummyPeftModel()
+            model.task = "classification"
+            model.config_path = "AI4Protein/ProSST-20"
+            model.structure_vocab_size = 20
+            model.lora_kwargs = {"num_lora": 1}
+
+            model.save_checkpoint(str(adapter_path))
+            metadata = json.loads(
+                (adapter_path / "colabprosst.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            self.assertEqual(metadata["checkpoint_format"], "peft_adapter")
+            self.assertEqual(metadata["task"], "classification")
+            self.assertEqual(
+                metadata["lora"],
+                {"r": 4, "lora_alpha": 8, "lora_dropout": 0.05},
+            )
+
     def test_threadpool_guard_ignores_only_deleted_library_paths(self):
         import threadpoolctl
 
@@ -2239,6 +2287,69 @@ class ColabProSSTInferenceTest(unittest.TestCase):
                     "token_classification",
                     "AI4Protein/ProSST-128",
                     128,
+                    num_labels=2,
+                )
+
+    def test_prediction_loads_a_peft_adapter_directory(self):
+        class FakeModel:
+            def to(self, _device):
+                return self
+
+            def eval(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            adapter_path = Path(temporary_dir) / "adapter"
+            adapter_path.mkdir()
+            (adapter_path / "adapter_config.json").write_text(
+                "{}",
+                encoding="utf-8",
+            )
+
+            with patch.object(
+                self.prediction,
+                "ProSSTClassificationModel",
+                return_value=FakeModel(),
+            ) as constructor:
+                self.prediction._load_model(
+                    task_type="classification",
+                    model_path="AI4Protein/ProSST-20",
+                    checkpoint_path=str(adapter_path),
+                    num_labels=2,
+                    structure_vocab_size=20,
+                    device=self.torch.device("cpu"),
+                )
+
+            kwargs = constructor.call_args.kwargs
+            self.assertTrue(kwargs["load_pretrained"])
+            self.assertNotIn("from_checkpoint", kwargs)
+            self.assertEqual(
+                kwargs["lora_kwargs"]["config_list"],
+                [{"lora_config_path": str(adapter_path)}],
+            )
+
+    def test_prediction_validates_lora_adapter_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            adapter_path = Path(temporary_dir) / "adapter"
+            adapter_path.mkdir()
+            (adapter_path / "colabprosst.json").write_text(
+                json.dumps(
+                    {
+                        "task": "regression",
+                        "base_model": "AI4Protein/ProSST-20",
+                        "structure_vocab_size": 20,
+                        "checkpoint_format": "peft_adapter",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "incompatible"):
+                self.prediction.validate_checkpoint_compatibility(
+                    str(adapter_path),
+                    "classification",
+                    "AI4Protein/ProSST-20",
+                    20,
                     num_labels=2,
                 )
 

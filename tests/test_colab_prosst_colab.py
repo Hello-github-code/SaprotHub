@@ -2262,6 +2262,149 @@ class ColabProSSTEmbeddingTest(unittest.TestCase):
                 )
 
 
+class ColabProSSTSaturationTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import pandas
+        import torch
+
+        from saprot.scripts import saturation_mutagenesis_prosst
+
+        cls.pd = pandas
+        cls.torch = torch
+        cls.saturation = saturation_mutagenesis_prosst
+
+    class FakeTokenizer:
+        def __init__(self):
+            self.vocab = {
+                amino_acid: index + 3
+                for index, amino_acid in enumerate(
+                    ColabProSSTSaturationTest.saturation.CANONICAL_AMINO_ACIDS
+                )
+            }
+
+        def get_vocab(self):
+            return self.vocab
+
+        def __call__(self, sequences, return_tensors="pt"):
+            rows = [
+                [1, *[self.vocab[residue] for residue in sequence], 2]
+                for sequence in sequences
+            ]
+            return {
+                "input_ids": ColabProSSTSaturationTest.torch.tensor(rows),
+                "attention_mask": ColabProSSTSaturationTest.torch.ones(
+                    (len(rows), len(rows[0])),
+                    dtype=ColabProSSTSaturationTest.torch.long,
+                ),
+            }
+
+    class FakeModel:
+        def __init__(self):
+            self.ss_input_ids = None
+
+        def to(self, _device):
+            return self
+
+        def eval(self):
+            return self
+
+        def __call__(
+            self,
+            input_ids,
+            attention_mask,
+            ss_input_ids,
+            return_dict,
+        ):
+            self.ss_input_ids = ss_input_ids.detach().cpu()
+            logits = ColabProSSTSaturationTest.torch.zeros(
+                (input_ids.shape[0], input_ids.shape[1], 25)
+            )
+            for token_id in range(3, 23):
+                logits[:, :, token_id] = float(token_id)
+            return types.SimpleNamespace(logits=logits)
+
+    def test_scores_every_position_and_writes_centered_heatmap(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            input_csv = root / "saturation.csv"
+            output_csv = root / "scores.csv"
+            matrix_csv = root / "matrix.csv"
+            heatmap_png = root / "heatmap.png"
+            self.pd.DataFrame(
+                [{"sequence": "AC", "structure_tokens": "0 1"}]
+            ).to_csv(input_csv, index=False)
+            fake_model = self.FakeModel()
+
+            with patch.object(
+                self.saturation.AutoTokenizer,
+                "from_pretrained",
+                return_value=self.FakeTokenizer(),
+            ), patch.object(
+                self.saturation.AutoModelForMaskedLM,
+                "from_pretrained",
+                return_value=fake_model,
+            ):
+                result = self.saturation.score_saturation_mutagenesis(
+                    input_csv=str(input_csv),
+                    output_csv=str(output_csv),
+                    output_matrix_csv=str(matrix_csv),
+                    output_heatmap_png=str(heatmap_png),
+                    model_path="AI4Protein/ProSST-20",
+                    device="cpu",
+                )
+
+            scores = result["score_table"].set_index("mutation")["score"]
+            self.assertEqual(len(scores), 40)
+            self.assertAlmostEqual(scores["A1A"], 0.0, places=6)
+            self.assertAlmostEqual(scores["A1C"], 1.0, places=6)
+            self.assertAlmostEqual(scores["C2A"], -1.0, places=6)
+            self.assertEqual(result["score_matrix"].shape, (20, 2))
+            self.assertEqual(
+                result["matrix_table"].columns.tolist(),
+                ["mutant", "A1", "C2"],
+            )
+            self.assertEqual(
+                fake_model.ss_input_ids.tolist(),
+                [[1, 3, 4, 2]],
+            )
+            self.assertTrue(output_csv.exists())
+            self.assertTrue(matrix_csv.exists())
+            self.assertGreater(heatmap_png.stat().st_size, 0)
+
+    def test_requires_exactly_one_canonical_protein(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            input_csv = root / "multiple.csv"
+            output_args = {
+                "output_csv": str(root / "scores.csv"),
+                "output_matrix_csv": str(root / "matrix.csv"),
+                "output_heatmap_png": str(root / "heatmap.png"),
+                "model_path": "AI4Protein/ProSST-20",
+                "device": "cpu",
+            }
+            self.pd.DataFrame(
+                [
+                    {"sequence": "AC", "structure_tokens": "0 1"},
+                    {"sequence": "AD", "structure_tokens": "0 2"},
+                ]
+            ).to_csv(input_csv, index=False)
+            with self.assertRaisesRegex(ValueError, "exactly one protein row"):
+                self.saturation.score_saturation_mutagenesis(
+                    input_csv=str(input_csv),
+                    **output_args,
+                )
+
+            self.pd.DataFrame(
+                [{"sequence": "AX", "structure_tokens": "0 1"}]
+            ).to_csv(input_csv, index=False)
+            with self.assertRaisesRegex(ValueError, "canonical amino acids"):
+                self.saturation.score_saturation_mutagenesis(
+                    input_csv=str(input_csv),
+                    **output_args,
+                )
+
+
 @unittest.skipUnless(
     importlib.util.find_spec("ipywidgets") is not None,
     "ipywidgets is installed only in the Colab UI runtime",

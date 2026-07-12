@@ -41,6 +41,16 @@ from saprot.utils.construct_prosst_lmdb import construct_prosst_lmdb
 from saprot.utils.module_loader import load_trainer, my_load_dataset, my_load_model
 
 
+RESUMABLE_CHECKPOINT_KEYS = {
+    "model",
+    "global_step",
+    "epoch",
+    "best_value",
+    "lr_scheduler",
+    "optimizer",
+}
+
+
 class ColabProSSTWorkflow:
     """Small Colab-facing workflow wrapper for ProSST tasks.
 
@@ -734,6 +744,40 @@ class ColabProSSTWorkflow:
             )
 
     @staticmethod
+    def _load_training_checkpoint(
+        checkpoint_path: str,
+        require_training_state: bool = False,
+    ) -> dict:
+        checkpoint = Path(str(checkpoint_path).strip())
+        if not checkpoint.is_file():
+            raise FileNotFoundError(
+                f"Training checkpoint does not exist: {checkpoint}"
+            )
+        try:
+            state = torch.load(checkpoint, map_location="cpu")
+        except Exception as exc:
+            raise ValueError(
+                f"Could not read ColabProSST checkpoint: {checkpoint}"
+            ) from exc
+        if not isinstance(state, dict) or not isinstance(
+            state.get("model"),
+            dict,
+        ):
+            raise ValueError(
+                "A ColabProSST training checkpoint must be a .pt dictionary "
+                "containing model weights under `model`."
+            )
+        if require_training_state:
+            missing = sorted(RESUMABLE_CHECKPOINT_KEYS - set(state))
+            if missing:
+                raise ValueError(
+                    "Exact resume requires a checkpoint saved with optimizer "
+                    "state. Missing fields: "
+                    f"{missing}. Use weight-only fine-tuning instead."
+                )
+        return state
+
+    @staticmethod
     def _validate_task_name(task_name: str) -> str:
         task_name = str(task_name).strip()
         if (
@@ -965,6 +1009,9 @@ class ColabProSSTWorkflow:
         freeze_backbone: bool = True,
         gradient_checkpointing: bool = True,
         load_pretrained: bool = True,
+        initial_checkpoint: str = "",
+        resume_optimizer_state: bool = False,
+        save_training_state: bool = False,
         learning_rate: float = 2.0e-5,
         download: bool = True,
     ) -> dict:
@@ -978,6 +1025,24 @@ class ColabProSSTWorkflow:
             model_path,
             structure_vocab_size,
         )
+        initial_checkpoint = str(initial_checkpoint or "").strip()
+        if resume_optimizer_state and not initial_checkpoint:
+            raise ValueError(
+                "Exact resume requires an initial ColabProSST checkpoint."
+            )
+        if initial_checkpoint:
+            self._load_training_checkpoint(
+                initial_checkpoint,
+                require_training_state=resume_optimizer_state,
+            )
+            validate_checkpoint_compatibility(
+                initial_checkpoint,
+                task_type,
+                model_path,
+                structure_vocab_size,
+                num_labels,
+            )
+            load_pretrained = False
 
         input_csv = self._prepare_input_csv(
             input_csv,
@@ -1033,6 +1098,7 @@ class ColabProSSTWorkflow:
             "freeze_backbone": freeze_backbone,
             "gradient_checkpointing": gradient_checkpointing,
             "save_path": str(checkpoint_path),
+            "save_weights_only": not save_training_state,
             "test_result_path": str(test_result_csv),
             "lr_scheduler_kwargs": {
                 "class": "ConstantLRScheduler",
@@ -1042,6 +1108,9 @@ class ColabProSSTWorkflow:
         }
         if task_type in CLASSIFICATION_TASK_TYPES:
             model_kwargs["num_labels"] = num_labels
+        if initial_checkpoint:
+            model_kwargs["from_checkpoint"] = initial_checkpoint
+            model_kwargs["load_prev_scheduler"] = resume_optimizer_state
 
         config = EasyDict(
             {
@@ -1106,6 +1175,9 @@ class ColabProSSTWorkflow:
             "task_type": task_type,
             "model_path": model_path,
             "structure_vocab_size": structure_vocab_size,
+            "initial_checkpoint": initial_checkpoint,
+            "resume_optimizer_state": bool(resume_optimizer_state),
+            "save_training_state": bool(save_training_state),
         }
 
     def predict_downstream(

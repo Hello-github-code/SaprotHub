@@ -1153,6 +1153,119 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
             self.assertIn("fit", captured)
             self.assertIn("test", captured)
 
+    def test_training_can_restore_full_checkpoint_state(self):
+        import torch
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            csv_path = root / "training.csv"
+            checkpoint_path = root / "resume.pt"
+            self.pd.DataFrame(
+                [
+                    {
+                        "sequence": sequence,
+                        "label": label,
+                        "stage": stage,
+                        "structure_tokens": tokens,
+                    }
+                    for sequence, label, stage, tokens in [
+                        ("ACD", 0, "train", "0 1 2"),
+                        ("ACE", 1, "valid", "0 1 3"),
+                        ("ACF", 0, "test", "0 1 4"),
+                    ]
+                ]
+            ).to_csv(csv_path, index=False)
+            torch.save(
+                {
+                    "model": {},
+                    "global_step": 12,
+                    "epoch": 2,
+                    "best_value": 0.75,
+                    "lr_scheduler": {},
+                    "optimizer": {},
+                    "colabprosst": {
+                        "task": "classification",
+                        "base_model": "AI4Protein/ProSST-20",
+                        "structure_vocab_size": 20,
+                        "num_labels": 2,
+                    },
+                },
+                checkpoint_path,
+            )
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+            captured = {}
+
+            class DummyModel:
+                pass
+
+            class DummyDataModule:
+                pass
+
+            class DummyTrainer:
+                def fit(self, model, datamodule):
+                    pass
+
+                def test(self, model, datamodule):
+                    pass
+
+            def load_model(config):
+                captured["model"] = config
+                return DummyModel()
+
+            with patch(
+                "saprot.utils.colab_prosst_workflow.construct_prosst_lmdb"
+            ), patch(
+                "saprot.utils.colab_prosst_workflow.my_load_model",
+                side_effect=load_model,
+            ), patch(
+                "saprot.utils.colab_prosst_workflow.my_load_dataset",
+                return_value=DummyDataModule(),
+            ), patch(
+                "saprot.utils.colab_prosst_workflow.load_trainer",
+                return_value=DummyTrainer(),
+            ):
+                result = workflow.train_downstream(
+                    task_type="classification",
+                    input_csv=str(csv_path),
+                    task_name="resume-test",
+                    num_labels=2,
+                    model_path="AI4Protein/ProSST-20",
+                    initial_checkpoint=str(checkpoint_path),
+                    resume_optimizer_state=True,
+                    save_training_state=True,
+                    download=False,
+                )
+
+            kwargs = captured["model"].kwargs
+            self.assertEqual(kwargs.from_checkpoint, str(checkpoint_path))
+            self.assertTrue(kwargs.load_prev_scheduler)
+            self.assertFalse(kwargs.load_pretrained)
+            self.assertFalse(kwargs.save_weights_only)
+            self.assertTrue(result["resume_optimizer_state"])
+            self.assertTrue(result["save_training_state"])
+
+    def test_exact_resume_rejects_a_weight_only_checkpoint(self):
+        import torch
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            checkpoint_path = Path(temporary_dir) / "weights-only.pt"
+            torch.save({"model": {}}, checkpoint_path)
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "Exact resume requires a checkpoint saved with optimizer state",
+            ):
+                self.workflow_class._load_training_checkpoint(
+                    str(checkpoint_path),
+                    require_training_state=True,
+                )
+
     def test_uploaded_content_is_saved_with_a_safe_filename(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)

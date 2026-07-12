@@ -938,6 +938,9 @@ class ColabProSSTUI:
             from google.colab import files
 
             files.download(path)
+            self.system_status.clear_output(wait=True)
+            with self.system_status:
+                print(f'Download started: {Path(path).name}')
         except Exception as exc:
             self.system_status.clear_output(wait=True)
             with self.system_status:
@@ -1687,6 +1690,13 @@ class ColabProSSTUI:
         )
         start_button = self._button("Start embedding extraction", style="info")
         output = self._output()
+        completion = self._html(
+            "",
+            width="100%",
+            max_width=self.GUIDE_WIDTH,
+            overflow="visible",
+            display="none",
+        )
 
         def update_embedding_source(change):
             embedding_artifact.set_visible(change["new"] == "artifact")
@@ -1703,6 +1713,8 @@ class ColabProSSTUI:
             self.latest_model_path = metadata["model_path"]
 
         def extract():
+            completion.value = ""
+            completion.layout.display = "none"
             if not csv_input.value:
                 raise ValueError("Upload a protein CSV or enter its path.")
             use_artifact = embedding_model_source.value == "artifact"
@@ -1744,6 +1756,13 @@ class ColabProSSTUI:
                 ]
                 print("residue embedding shapes:", residue_shapes)
             print("embedding package:", result["archive_path"])
+            completion.value = (
+                "<b>Embedding extraction completed.</b><br>"
+                f"Package: <code>{result['archive_path']}</code><br>"
+                "You can keep using this interface while the browser finishes "
+                "the download."
+            )
+            completion.layout.display = None
 
         embedding_artifact.on_loaded(apply_embedding_artifact)
         embedding_model_source.observe(update_embedding_source, names="value")
@@ -1772,6 +1791,7 @@ class ColabProSSTUI:
             self._separator(),
             start_button,
             output,
+            completion,
         )
 
     def _saturation_page(self):
@@ -2124,16 +2144,15 @@ class ColabProSSTUI:
                     self._process_pending_download()
                     time.sleep(0.1)
         except KeyboardInterrupt:
-            pass
+            self.system_status.clear_output(wait=True)
+            with self.system_status:
+                print(
+                    "Interface polling stopped. Run this cell again to resume "
+                    "interactive controls."
+                )
         finally:
             self._polling = False
             self.stop_task(silent=True)
-            self.clear_output(wait=True)
-            self.display(
-                self._heading(
-                    "The program is interrupted. Click the run-button to restart."
-                )
-            )
 
 
 def launch_colabprosst(workflow, poll=True):

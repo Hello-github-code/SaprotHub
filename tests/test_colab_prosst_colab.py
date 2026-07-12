@@ -3971,6 +3971,23 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             ui._process_pending_download()
         self.assertEqual(download_calls, ["/tmp/result.zip"])
 
+        class InterruptingPollContext:
+            def __enter__(self):
+                def poll_events(_count):
+                    raise KeyboardInterrupt
+
+                return poll_events
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+        fake_ui_poll = types.ModuleType("jupyter_ui_poll")
+        fake_ui_poll.ui_events = InterruptingPollContext
+        global_clear_calls.clear()
+        with patch.dict(sys.modules, {"jupyter_ui_poll": fake_ui_poll}):
+            ui.launch(poll=True)
+        self.assertEqual(global_clear_calls, [])
+
         with tempfile.TemporaryDirectory() as temporary_dir:
             class LegacyWorkflow:
                 upload_dir = Path(temporary_dir)

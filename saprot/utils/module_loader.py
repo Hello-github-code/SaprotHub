@@ -129,6 +129,14 @@ def my_load_dataset(config):
       from dataset.prosst.prosst_token_classification_dataset import ProSSTTokenClassificationDataset
       return ProSSTTokenClassificationDataset(**dataset_config)
 
+    if dataset_type == "prosst/prosst_pair_classification_dataset":
+      from dataset.prosst.prosst_pair_classification_dataset import ProSSTPairClassificationDataset
+      return ProSSTPairClassificationDataset(**dataset_config)
+
+    if dataset_type == "prosst/prosst_pair_regression_dataset":
+      from dataset.prosst.prosst_pair_regression_dataset import ProSSTPairRegressionDataset
+      return ProSSTPairRegressionDataset(**dataset_config)
+
     if dataset_type == "prosst/prosst_mutation_dataset":
       from dataset.prosst.prosst_mutation_dataset import ProSSTMutationDataset
       return ProSSTMutationDataset(**dataset_config)

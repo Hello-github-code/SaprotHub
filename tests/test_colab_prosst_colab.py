@@ -772,6 +772,180 @@ class ColabProSSTResidueModelTest(unittest.TestCase):
             self.assertEqual(result["target"].tolist(), [0, 1])
 
 
+class ColabProSSTPairDataTest(unittest.TestCase):
+    class FakeTokenizer:
+        vocab = {"A": 3, "C": 4, "D": 5, "E": 6}
+
+        def batch_encode_plus(self, sequences, **_kwargs):
+            import torch
+
+            encoded = [
+                [1, *[self.vocab[residue] for residue in sequence], 2]
+                for sequence in sequences
+            ]
+            target_length = max(len(row) for row in encoded)
+            return {
+                "input_ids": torch.tensor(
+                    [
+                        row + [0] * (target_length - len(row))
+                        for row in encoded
+                    ]
+                ),
+                "attention_mask": torch.tensor(
+                    [
+                        [1] * len(row) + [0] * (target_length - len(row))
+                        for row in encoded
+                    ]
+                ),
+            }
+
+    def test_pair_csv_builds_two_independently_aligned_structures(self):
+        import lmdb
+        import pandas as pd
+
+        from saprot.utils.construct_prosst_lmdb import construct_prosst_lmdb
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            csv_path = root / "pair-training.csv"
+            pd.DataFrame(
+                [
+                    {
+                        "sequence_1": "ACD",
+                        "sequence_2": "AC",
+                        "label": 1,
+                        "stage": stage,
+                        "structure_tokens_1": "0 1 2",
+                        "structure_tokens_2": "3 4",
+                        "structure_vocab_size": 20,
+                    }
+                    for stage in ["train", "valid", "test"]
+                ]
+            ).to_csv(csv_path, index=False)
+
+            construct_prosst_lmdb(
+                str(csv_path),
+                str(root / "LMDB"),
+                "pair-task",
+                "pair_classification",
+                structure_vocab_size=20,
+            )
+
+            env = lmdb.open(
+                str(root / "LMDB" / "pair-task" / "train"),
+                readonly=True,
+                lock=False,
+            )
+            try:
+                with env.begin() as transaction:
+                    sample = json.loads(transaction.get(b"0").decode())
+            finally:
+                env.close()
+
+            self.assertEqual(sample["seq_1"], "ACD")
+            self.assertEqual(sample["seq_2"], "AC")
+            self.assertEqual(sample["structure_tokens_1"], "0 1 2")
+            self.assertEqual(sample["structure_tokens_2"], "3 4")
+            self.assertEqual(sample["structure_vocab_size"], 20)
+            self.assertEqual(sample["label"], 1)
+
+    def test_pair_csv_requires_structure_for_each_partner(self):
+        import pandas as pd
+
+        from saprot.utils.construct_prosst_lmdb import construct_prosst_lmdb
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            csv_path = root / "bad-pair.csv"
+            pd.DataFrame(
+                [
+                    {
+                        "sequence_1": "ACD",
+                        "sequence_2": "AC",
+                        "label": 1,
+                        "stage": "train",
+                        "structure_tokens_1": "0 1 2",
+                    }
+                ]
+            ).to_csv(csv_path, index=False)
+
+            with self.assertRaisesRegex(ValueError, "Pair protein 2"):
+                construct_prosst_lmdb(
+                    str(csv_path),
+                    str(root / "LMDB"),
+                    "bad-pair-task",
+                    "pair_classification",
+                    structure_vocab_size=20,
+                )
+
+    def test_pair_classification_rejects_fractional_category_ids(self):
+        import pandas as pd
+
+        from saprot.utils.construct_prosst_lmdb import construct_prosst_lmdb
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            csv_path = root / "fractional-pair.csv"
+            pd.DataFrame(
+                [
+                    {
+                        "sequence_1": "ACD",
+                        "sequence_2": "AC",
+                        "label": 1.5,
+                        "stage": "train",
+                        "structure_tokens_1": "0 1 2",
+                        "structure_tokens_2": "3 4",
+                    }
+                ]
+            ).to_csv(csv_path, index=False)
+
+            with self.assertRaisesRegex(ValueError, "integer category ID"):
+                construct_prosst_lmdb(
+                    str(csv_path),
+                    str(root / "LMDB"),
+                    "fractional-pair-task",
+                    "pair_classification",
+                    structure_vocab_size=20,
+                )
+
+    def test_pair_datasets_collate_both_prosst_inputs_and_label_types(self):
+        import torch
+
+        from saprot.dataset.prosst.prosst_pair_classification_dataset import (
+            ProSSTPairClassificationDataset,
+        )
+        from saprot.dataset.prosst.prosst_pair_regression_dataset import (
+            ProSSTPairRegressionDataset,
+        )
+
+        batch = [
+            ("ACD", [0, 1, 2], "AC", [3, 4], 1),
+            ("AC", [5, 6], "ACE", [7, 8, 9], 0),
+        ]
+        classification = object.__new__(ProSSTPairClassificationDataset)
+        classification.tokenizer = self.FakeTokenizer()
+        classification.structure_vocab_size = 20
+        classification.max_length = 10
+
+        inputs, labels = classification.collate_fn(batch)
+        self.assertEqual(set(inputs), {"inputs_1", "inputs_2"})
+        self.assertEqual(inputs["inputs_1"]["input_ids"].shape, (2, 5))
+        self.assertEqual(inputs["inputs_2"]["input_ids"].shape, (2, 5))
+        self.assertEqual(
+            inputs["inputs_1"]["ss_input_ids"].tolist(),
+            [[1, 3, 4, 5, 2], [1, 8, 9, 2, 0]],
+        )
+        self.assertEqual(labels["labels"].dtype, torch.long)
+        self.assertEqual(labels["labels"].tolist(), [1, 0])
+
+        regression = object.__new__(ProSSTPairRegressionDataset)
+        regression.tokenizer = self.FakeTokenizer()
+        regression.structure_vocab_size = 20
+        regression.max_length = 10
+        _inputs, regression_labels = regression.collate_fn(batch)
+        self.assertEqual(regression_labels["labels"].dtype, torch.float)
+
+
 class ColabProSSTWorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

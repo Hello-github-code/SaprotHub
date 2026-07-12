@@ -52,6 +52,7 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("os.environ['MPLBACKEND'] = 'Agg'", source)
         self.assertIn("figure = plt.figure(); plt.close(figure)", source)
         self.assertIn("ENVIRONMENT_GENERATION", source)
+        self.assertIn("2026-07-12-clean-kernel-v2", source)
         self.assertIn("ENVIRONMENT_MARKER.write_text", source)
         self.assertIn("os.kill(os.getpid(), signal.SIGKILL)", source)
         self.assertIn("run this same cell once more", source)
@@ -60,6 +61,10 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertNotIn("DOWNLOAD_CSV_TEMPLATES", source)
         self.assertNotIn("WORKFLOW", assigned_names)
         self.assertNotIn("os.environ['TRANSFORMERS_CACHE']", source)
+
+        ui_source = UI_PATH.read_text(encoding="utf-8")
+        self.assertIn("2026-07-12-clean-kernel-v2", ui_source)
+        self.assertIn("outdated ColabProSST bootstrap", ui_source)
 
         introduction = "".join(notebook["cells"][0]["source"])
         self.assertIn("A structure-aware ColabPLM powered by ProSST", introduction)
@@ -126,6 +131,7 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         source = "".join(notebook["cells"][2]["source"])
 
         self.assertIn("saprot/utils/colab_prosst_ui.py", source)
+        self.assertIn("saprot/scripts/plot_prosst_saturation.py", source)
         self.assertIn("prosst/structure/get_sst_seq.py", source)
         self.assertIn("prosst/structure/static/AE.pt", source)
         for vocab_size in [20, 128, 512, 1024, 2048, 4096]:
@@ -152,6 +158,34 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("Official ProSST source:", source)
         self.assertIn("module_name.startswith('prosst.')", source)
         self.assertNotIn("load_colabprosst_workflow", source)
+
+    def test_outdated_colab_bootstrap_is_rejected_before_ui_launch(self):
+        from saprot.utils import colab_prosst_ui
+
+        fake_google = types.ModuleType("google")
+        fake_google.__path__ = []
+        fake_colab = types.ModuleType("google.colab")
+        fake_colab.__path__ = []
+        fake_google.colab = fake_colab
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            marker = Path(temporary_dir) / "environment_generation"
+            with patch.object(
+                colab_prosst_ui,
+                "COLAB_ENVIRONMENT_MARKER",
+                marker,
+            ), patch.dict(
+                sys.modules,
+                {"google": fake_google, "google.colab": fake_colab},
+            ):
+                with self.assertRaisesRegex(RuntimeError, "outdated"):
+                    colab_prosst_ui._validate_colab_environment()
+
+                marker.write_text(
+                    colab_prosst_ui.COLAB_ENVIRONMENT_GENERATION,
+                    encoding="utf-8",
+                )
+                colab_prosst_ui._validate_colab_environment()
 
     def test_home_menu_matches_colabsaprot_top_level_actions(self):
         source = UI_PATH.read_text(encoding="utf-8")

@@ -1,6 +1,9 @@
 import argparse
-import math
+import json
+import os
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -46,45 +49,47 @@ def plot_saturation_heatmap(
     sequence: str,
     output_png: str,
 ) -> str:
-    import matplotlib.pyplot as plt
-
-    values = score_matrix.detach().float().cpu().numpy()
-    max_abs = float(abs(values).max())
-    if max_abs == 0:
-        max_abs = 1.0
-
-    figure_width = min(40.0, max(8.0, len(sequence) * 0.18))
-    figure, axis = plt.subplots(figsize=(figure_width, 7.0))
-    image = axis.imshow(
-        values,
-        aspect="auto",
-        interpolation="nearest",
-        cmap="coolwarm",
-        vmin=-max_abs,
-        vmax=max_abs,
-    )
-    axis.set_yticks(range(len(CANONICAL_AMINO_ACIDS)))
-    axis.set_yticklabels(CANONICAL_AMINO_ACIDS)
-    axis.set_ylabel("Mutant amino acid")
-
-    tick_stride = max(1, math.ceil(len(sequence) / 50))
-    tick_positions = list(range(0, len(sequence), tick_stride))
-    axis.set_xticks(tick_positions)
-    axis.set_xticklabels(
-        [f"{sequence[index]}{index + 1}" for index in tick_positions],
-        rotation=90,
-        fontsize=8,
-    )
-    axis.set_xlabel("Wild-type residue and position")
-    axis.set_title("ProSST single-site saturation mutagenesis")
-    colorbar = figure.colorbar(image, ax=axis, pad=0.01)
-    colorbar.set_label("log P(mutant) - log P(wild type)")
-    figure.tight_layout()
-
     output_path = Path(output_png)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(output_path, dpi=180, bbox_inches="tight")
-    plt.close(figure)
+    plotter_path = Path(__file__).with_name("plot_prosst_saturation.py")
+    payload_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".json",
+            encoding="utf-8",
+            delete=False,
+        ) as handle:
+            json.dump(
+                {
+                    "sequence": sequence,
+                    "amino_acids": "".join(CANONICAL_AMINO_ACIDS),
+                    "scores": score_matrix.detach().float().cpu().tolist(),
+                },
+                handle,
+            )
+            payload_path = Path(handle.name)
+
+        environment = os.environ.copy()
+        environment["MPLBACKEND"] = "Agg"
+        subprocess.run(
+            [
+                sys.executable,
+                str(plotter_path),
+                "--input-json",
+                str(payload_path),
+                "--output-png",
+                str(output_path),
+            ],
+            check=True,
+            env=environment,
+        )
+    finally:
+        if payload_path is not None:
+            payload_path.unlink(missing_ok=True)
+
+    if not output_path.is_file() or output_path.stat().st_size == 0:
+        raise RuntimeError(f"ProSST heatmap was not created: {output_path}")
     return str(output_path)
 
 

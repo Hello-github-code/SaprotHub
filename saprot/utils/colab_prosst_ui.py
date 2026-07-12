@@ -16,6 +16,32 @@ from saprot.model.prosst.specs import (
 )
 
 
+COLAB_ENVIRONMENT_GENERATION = "2026-07-12-clean-kernel-v2"
+COLAB_ENVIRONMENT_MARKER = Path(
+    "/content/.cache/colabprosst/environment_generation"
+)
+
+
+def _validate_colab_environment():
+    try:
+        import google.colab  # noqa: F401
+    except Exception:
+        return
+
+    actual_generation = (
+        COLAB_ENVIRONMENT_MARKER.read_text(encoding="utf-8").strip()
+        if COLAB_ENVIRONMENT_MARKER.is_file()
+        else ""
+    )
+    if actual_generation != COLAB_ENVIRONMENT_GENERATION:
+        raise RuntimeError(
+            "This Colab tab is running an outdated ColabProSST bootstrap. "
+            "Open a new notebook tab from the prosst branch GitHub Colab URL, "
+            "run its code cell, wait for the one-time Python kernel restart, "
+            "and then run that cell once more."
+        )
+
+
 class _UploadField:
     def __init__(self, ui, description, placeholder):
         self.ui = ui
@@ -534,6 +560,7 @@ class ColabProSSTUI:
     GUIDE_WIDTH = "720px"
 
     def __init__(self, workflow):
+        _validate_colab_environment()
         try:
             import ipywidgets
             from IPython.display import Image, clear_output, display

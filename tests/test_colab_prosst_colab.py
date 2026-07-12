@@ -1458,6 +1458,144 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
                     resume_optimizer_state=True,
                 )
 
+    def test_downloads_and_inspects_community_artifacts(self):
+        import torch
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+
+            full_repo = root / "full-repo"
+            full_repo.mkdir()
+            torch.save(
+                {
+                    "model": {},
+                    "colabprosst": {
+                        "task": "classification",
+                        "base_model": "AI4Protein/ProSST-20",
+                        "structure_vocab_size": 20,
+                        "num_labels": 3,
+                    },
+                },
+                full_repo / "model.pt",
+            )
+            with patch(
+                "huggingface_hub.snapshot_download",
+                return_value=str(full_repo),
+            ) as download:
+                full = workflow.download_community_checkpoint(
+                    "Example/Full-ProSST",
+                    revision="v1",
+                )
+
+            self.assertEqual(full["artifact_type"], "full")
+            self.assertEqual(full["task_type"], "classification")
+            self.assertEqual(full["num_labels"], 3)
+            self.assertEqual(full["revision"], "v1")
+            self.assertFalse(
+                download.call_args.kwargs["local_dir_use_symlinks"]
+            )
+
+            lora_repo = root / "lora-repo"
+            lora_repo.mkdir()
+            (lora_repo / "adapter_config.json").write_text(
+                "{}",
+                encoding="utf-8",
+            )
+            (lora_repo / "colabprosst.json").write_text(
+                json.dumps(
+                    {
+                        "task": "pair_regression",
+                        "base_model": "AI4Protein/ProSST-128",
+                        "structure_vocab_size": 128,
+                        "checkpoint_format": "peft_adapter",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch(
+                "huggingface_hub.snapshot_download",
+                return_value=str(lora_repo),
+            ):
+                lora = workflow.download_community_checkpoint(
+                    "Example/LoRA-ProSST"
+                )
+
+            self.assertEqual(lora["artifact_type"], "lora")
+            self.assertEqual(lora["task_type"], "pair_regression")
+            self.assertEqual(lora["model_path"], "AI4Protein/ProSST-128")
+            self.assertEqual(lora["revision"], "main")
+
+    def test_community_repository_id_is_path_safe(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+            for repo_id in ["", "one-part", "../model", "owner\\model"]:
+                with self.subTest(repo_id=repo_id), self.assertRaises(ValueError):
+                    workflow.download_community_checkpoint(repo_id)
+
+    def test_shares_a_lora_adapter_as_a_community_repository(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            adapter = root / "adapter"
+            adapter.mkdir()
+            (adapter / "adapter_config.json").write_text(
+                "{}",
+                encoding="utf-8",
+            )
+            (adapter / "adapter_model.safetensors").write_bytes(b"adapter")
+            (adapter / "colabprosst.json").write_text(
+                json.dumps(
+                    {
+                        "task": "classification",
+                        "base_model": "AI4Protein/ProSST-20",
+                        "structure_vocab_size": 20,
+                        "num_labels": 2,
+                        "checkpoint_format": "peft_adapter",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+
+            with patch("huggingface_hub.HfApi") as api_class:
+                package = workflow.upload_checkpoint_to_hf(
+                    repo_id="Example/ProSST-LoRA",
+                    checkpoint_path=str(adapter),
+                    task_type="classification",
+                    num_labels=2,
+                    model_path="AI4Protein/ProSST-20",
+                    run_login=False,
+                )
+
+            self.assertTrue((package / "adapter_config.json").is_file())
+            self.assertTrue((package / "adapter_model.safetensors").is_file())
+            self.assertFalse((package / "model.pt").exists())
+            metadata = json.loads(
+                (package / "metadata.json").read_text(encoding="utf-8")
+            )
+            self.assertIn("PEFT adapter", metadata["checkpoint_format"])
+            api_class.return_value.create_repo.assert_called_once()
+            api_class.return_value.upload_folder.assert_called_once()
+
     def test_uploaded_content_is_saved_with_a_safe_filename(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)

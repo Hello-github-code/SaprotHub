@@ -191,6 +191,170 @@ class ColabProSSTWorkflow:
             )
         return str(checkpoint)
 
+    @staticmethod
+    def _normalize_artifact_metadata(metadata: dict) -> dict:
+        if not isinstance(metadata, dict):
+            raise ValueError("ColabProSST artifact metadata must be a dictionary.")
+        model_family = metadata.get("model_family")
+        if model_family is not None and str(model_family).lower() != "prosst":
+            raise ValueError(
+                f"Expected a ProSST artifact, found model_family={model_family!r}."
+            )
+        normalized = {
+            "task_type": metadata.get("task_type", metadata.get("task")),
+            "model_path": metadata.get("base_model"),
+            "structure_vocab_size": metadata.get("structure_vocab_size"),
+            "num_labels": metadata.get("num_labels"),
+            "checkpoint_format": metadata.get("checkpoint_format"),
+        }
+        missing = [
+            key
+            for key in ["task_type", "model_path", "structure_vocab_size"]
+            if normalized[key] in {None, ""}
+        ]
+        if missing:
+            raise ValueError(
+                "ColabProSST artifact metadata is missing fields: "
+                f"{missing}."
+            )
+        if normalized["task_type"] not in SUPPORTED_TASK_TYPES:
+            raise ValueError(
+                "Unsupported community checkpoint task: "
+                f"{normalized['task_type']!r}."
+            )
+        normalized["structure_vocab_size"] = int(
+            normalized["structure_vocab_size"]
+        )
+        if normalized["num_labels"] is not None:
+            normalized["num_labels"] = int(normalized["num_labels"])
+        return normalized
+
+    def inspect_model_artifact(self, checkpoint_path: str) -> dict:
+        checkpoint = Path(str(checkpoint_path).strip())
+        if checkpoint.is_file() and checkpoint.suffix.lower() == ".zip":
+            checkpoint = Path(self.resolve_lora_adapter(str(checkpoint)))
+
+        if checkpoint.is_dir():
+            metadata_path = checkpoint / "colabprosst.json"
+            if not metadata_path.is_file():
+                raise ValueError(
+                    "LoRA adapter is missing colabprosst.json metadata."
+                )
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError(
+                    f"Could not read LoRA metadata: {metadata_path}"
+                ) from exc
+            artifact_type = "lora"
+        elif checkpoint.is_file():
+            try:
+                state = torch.load(checkpoint, map_location="cpu")
+            except Exception as exc:
+                raise ValueError(
+                    f"Could not read ColabProSST checkpoint: {checkpoint}"
+                ) from exc
+            metadata = state.get("colabprosst") if isinstance(state, dict) else None
+            if not isinstance(metadata, dict):
+                sidecar = checkpoint.parent / "metadata.json"
+                if sidecar.is_file():
+                    try:
+                        metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError) as exc:
+                        raise ValueError(
+                            f"Could not read checkpoint metadata: {sidecar}"
+                        ) from exc
+            if not isinstance(metadata, dict):
+                raise ValueError(
+                    "Full checkpoint is missing ColabProSST metadata."
+                )
+            artifact_type = "full"
+        else:
+            raise FileNotFoundError(
+                f"Model checkpoint or adapter does not exist: {checkpoint}"
+            )
+
+        result = self._normalize_artifact_metadata(metadata)
+        result.update(
+            {
+                "artifact_path": str(checkpoint),
+                "artifact_type": artifact_type,
+            }
+        )
+        return result
+
+    def download_community_checkpoint(
+        self,
+        repo_id: str,
+        revision: str = "",
+        token=None,
+        force_download: bool = False,
+    ) -> dict:
+        repo_id = str(repo_id).strip()
+        parts = repo_id.split("/")
+        if (
+            len(parts) != 2
+            or any(not part or part in {".", ".."} for part in parts)
+            or "\\" in repo_id
+        ):
+            raise ValueError(
+                "Hugging Face repository ID must look like `owner/model`."
+            )
+        revision = str(revision or "").strip() or None
+        community_root = self.saprothub_dir / "community_models"
+        community_root.mkdir(parents=True, exist_ok=True)
+        target_dir = community_root / repo_id.replace("/", "__")
+        resolved_root = community_root.resolve()
+        resolved_target = target_dir.resolve()
+        if resolved_root not in resolved_target.parents:
+            raise ValueError("Unsafe community model cache path.")
+        if force_download and target_dir.exists():
+            shutil.rmtree(target_dir)
+
+        from huggingface_hub import snapshot_download
+
+        snapshot_path = Path(
+            snapshot_download(
+                repo_id=repo_id,
+                repo_type="model",
+                revision=revision,
+                token=token,
+                local_dir=str(target_dir),
+                local_dir_use_symlinks=False,
+                force_download=force_download,
+            )
+        )
+        adapter_candidates = [
+            path.parent
+            for path in snapshot_path.rglob("adapter_config.json")
+            if ".cache" not in path.parts
+        ]
+        full_candidates = [
+            path
+            for path in snapshot_path.rglob("model.pt")
+            if ".cache" not in path.parts
+        ]
+        artifact_candidates = [
+            *[("lora", path) for path in adapter_candidates],
+            *[("full", path) for path in full_candidates],
+        ]
+        if len(artifact_candidates) != 1:
+            raise ValueError(
+                "A community repository must contain exactly one "
+                "ColabProSST model.pt or PEFT adapter; found "
+                f"{len(artifact_candidates)} artifacts."
+            )
+        _artifact_type, artifact_path = artifact_candidates[0]
+        result = self.inspect_model_artifact(str(artifact_path))
+        result.update(
+            {
+                "repo_id": repo_id,
+                "revision": revision or "main",
+                "snapshot_path": str(snapshot_path),
+            }
+        )
+        return result
+
     def create_csv_templates(
         self,
         template_dir: str = "/content/prosst_templates",
@@ -1360,6 +1524,8 @@ class ColabProSSTWorkflow:
         )
 
         checkpoint = Path(checkpoint_path)
+        if checkpoint.is_dir() or checkpoint.suffix.lower() == ".zip":
+            checkpoint = Path(self.resolve_lora_adapter(str(checkpoint)))
         if not checkpoint.exists():
             raise FileNotFoundError(f"Checkpoint does not exist: {checkpoint}")
         validate_checkpoint_compatibility(
@@ -1380,14 +1546,28 @@ class ColabProSSTWorkflow:
         shutil.rmtree(package_dir, ignore_errors=True)
         package_dir.mkdir(parents=True, exist_ok=True)
 
-        shutil.copy2(checkpoint, package_dir / "model.pt")
+        is_lora = checkpoint.is_dir()
+        if is_lora:
+            for source in checkpoint.iterdir():
+                destination = package_dir / source.name
+                if source.is_dir():
+                    shutil.copytree(source, destination)
+                else:
+                    shutil.copy2(source, destination)
+        else:
+            shutil.copy2(checkpoint, package_dir / "model.pt")
+        checkpoint_format = (
+            "SaprotHub/ColabProSST PEFT adapter"
+            if is_lora
+            else "SaprotHub/ColabProSST torch checkpoint"
+        )
         input_format = "amino-acid input_ids + ProSST ss_input_ids"
         if task_type in PAIR_TASK_TYPES:
             input_format = f"two sets of {input_format}"
         metadata = {
             "model_family": "ProSST",
             "base_model": model_path,
-            "checkpoint_format": "SaprotHub/ColabProSST torch checkpoint",
+            "checkpoint_format": checkpoint_format,
             "task_type": task_type,
             "input_format": input_format,
             "structure_vocab_size": structure_vocab_size,
@@ -1420,7 +1600,7 @@ tags:
 
 {description}
 
-This repository contains a SaprotHub/ColabProSST checkpoint (`model.pt`) and metadata for a ProSST downstream model.
+This repository contains a SaprotHub/ColabProSST {"PEFT adapter" if is_lora else "checkpoint (`model.pt`)"} and metadata for a ProSST downstream model.
 
 ## Input Format
 

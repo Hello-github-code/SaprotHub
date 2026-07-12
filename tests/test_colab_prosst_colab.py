@@ -1232,6 +1232,22 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         ui.stop_task(silent=False)
         self.assertEqual(global_clear_calls, [])
 
+        with patch.object(
+            module.pkgutil,
+            "get_data",
+            return_value=b"window.colabUploadTest = true;",
+        ):
+            styled_upload_field = module._UploadField(
+                ui,
+                "Training CSV:",
+                "Choose CSV",
+            )
+        upload_html = styled_upload_field.inline_upload.value
+        self.assertIn(">Choose file</label>", upload_html)
+        self.assertIn(">No file selected</span>", upload_html)
+        self.assertIn("clip-path: inset(50%)", upload_html)
+        self.assertIn("type=\"file\"", upload_html)
+
         upload_field = module._UploadField(ui, "Training CSV:", "Choose CSV")
         upload_field.inline_upload.value = "<input type='file'>"
         encoded_chunk = base64.b64encode(b"sequence,label\nACD,1\n").decode("ascii")

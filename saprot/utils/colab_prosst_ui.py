@@ -59,13 +59,57 @@ class _UploadField:
             return ""
 
         return """
-            <input type="file" id="{input_id}" name="files[]" disabled
-                   style="border:none" />
+            <style>
+              #{container_id} {{
+                align-items: center;
+                display: flex;
+                gap: 10px;
+                min-height: 30px;
+              }}
+              #{input_id} {{
+                border: 0;
+                clip: rect(0 0 0 0);
+                clip-path: inset(50%);
+                height: 1px;
+                margin: -1px;
+                overflow: hidden;
+                padding: 0;
+                position: absolute;
+                white-space: nowrap;
+                width: 1px;
+              }}
+              #{label_id} {{
+                background: #1a73e8;
+                border-radius: 2px;
+                color: #fff;
+                cursor: pointer;
+                display: inline-flex;
+                font: 500 13px Arial, sans-serif;
+                padding: 6px 12px;
+              }}
+              #{input_id}:disabled + #{label_id} {{
+                cursor: wait;
+                opacity: 0.65;
+              }}
+              #{filename_id} {{
+                color: inherit;
+                font: 13px Arial, sans-serif;
+              }}
+            </style>
+            <div id="{container_id}">
+              <input type="file" id="{input_id}" name="files[]" disabled
+                     onchange="document.getElementById('{filename_id}').textContent = this.files.length ? this.files[0].name : 'No file selected'" />
+              <label id="{label_id}" for="{input_id}">Choose file</label>
+              <span id="{filename_id}">No file selected</span>
+            </div>
             <output id="{output_id}"></output>
             <script>{files_js}</script>
         """.format(
             input_id=self.input_id,
             output_id=self.output_id,
+            container_id=f"{self.input_id}-container",
+            label_id=f"{self.input_id}-label",
+            filename_id=f"{self.input_id}-filename",
             files_js=files_js.decode("utf-8"),
         )
 

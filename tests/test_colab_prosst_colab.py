@@ -3560,6 +3560,10 @@ class ColabProSSTWidgetTest(unittest.TestCase):
                 ("Both", "both"),
             ],
         )
+        self.assertEqual(embedding_level.layout.width, "100%")
+        self.assertEqual(embedding_level.layout.max_width, ui.GUIDE_WIDTH)
+        self.assertEqual(embedding_level.layout.height, "auto")
+        self.assertEqual(embedding_level.layout.overflow, "visible")
         self.assertEqual(embedding_artifact_source.layout.display, "none")
         self.assertEqual(embedding_artifact_path.layout.display, "none")
         embedding_model_source.value = "artifact"

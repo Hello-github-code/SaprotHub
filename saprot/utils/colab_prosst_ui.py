@@ -1609,7 +1609,13 @@ class ColabProSSTUI:
             value="protein",
             description="Embedding level:",
             style={"description_width": "initial"},
-            layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
+            layout=widgets.Layout(
+                width="100%",
+                max_width=self.GUIDE_WIDTH,
+                min_height=self.HEIGHT,
+                height="auto",
+                overflow="visible",
+            ),
         )
         model = self._model_dropdown()
         embedding_model_source = widgets.ToggleButtons(

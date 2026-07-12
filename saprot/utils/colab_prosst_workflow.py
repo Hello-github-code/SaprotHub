@@ -18,6 +18,10 @@ from saprot.data.prosst_labels import (
     validate_residue_labels,
 )
 from saprot.scripts.mutation_zeroshot_prosst import score_mutants
+from saprot.scripts.extract_prosst_embeddings import (
+    EMBEDDING_LEVELS,
+    extract_embeddings as extract_prosst_embeddings,
+)
 from saprot.scripts.predict_prosst import (
     CLASSIFICATION_TASK_TYPES,
     PAIR_TASK_TYPES,
@@ -772,6 +776,83 @@ class ColabProSSTWorkflow:
         if download:
             self._download(output_path)
         return df
+
+    def extract_embeddings(
+        self,
+        input_csv: str,
+        upload_csv: bool = False,
+        use_last_structure_tokens: bool = False,
+        structure_zip: str = "",
+        upload_structure_zip: bool = False,
+        model_path: str = MODEL_PROSST_2048,
+        structure_vocab_size: Optional[int] = None,
+        level: str = "protein",
+        batch_size: int = 1,
+        max_length: int = 2046,
+        output_pt: Optional[str] = None,
+        output_index_csv: Optional[str] = None,
+        download: bool = True,
+    ) -> dict:
+        level = str(level).strip().lower()
+        if level not in EMBEDDING_LEVELS:
+            raise ValueError(
+                f"Embedding level must be one of {sorted(EMBEDDING_LEVELS)}."
+            )
+        structure_vocab_size = resolve_structure_vocab_size(
+            model_path,
+            structure_vocab_size,
+        )
+        input_csv = self._prepare_input_csv(
+            input_csv,
+            upload_csv,
+            use_last_structure_tokens,
+            "embedding",
+            structure_vocab_size,
+        )
+        structure_base_dir = self.maybe_extract_asset_zip(
+            structure_zip,
+            upload_structure_zip,
+        )
+
+        embedding_path = (
+            Path(output_pt)
+            if output_pt
+            else self.output_dir / f"prosst_{level}_embeddings.pt"
+        )
+        index_path = (
+            Path(output_index_csv)
+            if output_index_csv
+            else self.output_dir / f"prosst_{level}_embeddings_index.csv"
+        )
+        result = extract_prosst_embeddings(
+            input_csv=input_csv,
+            output_pt=str(embedding_path),
+            output_index_csv=str(index_path),
+            model_path=model_path,
+            level=level,
+            cache_dir=str(self.cache_dir),
+            structure_vocab_size=structure_vocab_size,
+            batch_size=batch_size,
+            max_length=max_length,
+            structure_base_dir=structure_base_dir,
+        )
+
+        archive_path = self.output_dir / f"prosst_{level}_embeddings.zip"
+        with zipfile.ZipFile(
+            archive_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as archive:
+            archive.write(embedding_path, arcname=embedding_path.name)
+            archive.write(index_path, arcname=index_path.name)
+        result["archive_path"] = str(archive_path)
+
+        print("saved embeddings:", embedding_path)
+        print("saved embedding index:", index_path)
+        print("saved embedding package:", archive_path)
+        if download:
+            self._download(archive_path)
+        return result
 
     def train_downstream(
         self,

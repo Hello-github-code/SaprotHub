@@ -227,6 +227,13 @@ class ColabProSSTWorkflow:
         )
         if normalized["num_labels"] is not None:
             normalized["num_labels"] = int(normalized["num_labels"])
+        if (
+            normalized["task_type"] in CLASSIFICATION_TASK_TYPES
+            and normalized["num_labels"] is None
+        ):
+            raise ValueError(
+                "Classification artifact metadata must include num_labels."
+            )
         return normalized
 
     def inspect_model_artifact(self, checkpoint_path: str) -> dict:

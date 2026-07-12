@@ -75,6 +75,10 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         )
         self.assertIn("checkpoint continuation", introduction)
         self.assertIn("LoRA/PEFT training", introduction)
+        self.assertIn(
+            "direct Hugging Face/SaprotHub community checkpoint loading",
+            introduction,
+        )
         self.assertIn("ColabSaprot", introduction)
         self.assertIn("ColabSeprot", introduction)
         self.assertIn("ColabESMC", introduction)
@@ -3033,6 +3037,19 @@ class ColabProSSTWidgetTest(unittest.TestCase):
                 self.saved_upload = (filename, content)
                 return f"/tmp/{Path(filename).name}"
 
+            @staticmethod
+            def download_community_checkpoint(repo_id, revision=""):
+                return {
+                    "artifact_path": "/tmp/community-adapter",
+                    "artifact_type": "lora",
+                    "task_type": "pair_classification",
+                    "model_path": "AI4Protein/ProSST-128",
+                    "structure_vocab_size": 128,
+                    "num_labels": 3,
+                    "repo_id": repo_id,
+                    "revision": revision or "main",
+                }
+
         workflow = DummyWorkflow()
         ui = module.ColabProSSTUI(workflow)
         rendered = []
@@ -3097,6 +3114,31 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         )
         self.assertTrue(ui._uses_category_count("pair_classification"))
         self.assertFalse(ui._uses_category_count("pair_regression"))
+
+        metadata_task = ui._task_dropdown()
+        metadata_model = ui._model_dropdown()
+        metadata_categories = ui._num_labels()
+        metadata_method = ui.widgets.ToggleButtons(
+            options=[("Full", "full"), ("LoRA", "lora")],
+            value="full",
+        )
+        ui._apply_artifact_metadata(
+            {
+                "artifact_path": "/tmp/community-adapter",
+                "artifact_type": "lora",
+                "task_type": "pair_classification",
+                "model_path": "AI4Protein/ProSST-128",
+                "num_labels": 3,
+            },
+            metadata_task,
+            metadata_model,
+            metadata_categories,
+            metadata_method,
+        )
+        self.assertEqual(metadata_task.value, "pair_classification")
+        self.assertEqual(metadata_model.value, "AI4Protein/ProSST-128")
+        self.assertEqual(metadata_categories.value, 3)
+        self.assertEqual(metadata_method.value, "lora")
 
         structure_input = module._StructureInput(ui)
         self.assertEqual(structure_input.mode.value, structure_input.TOKENS)
@@ -3185,6 +3227,25 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         self.assertTrue(structure_input.reuse_latest)
         self.assertEqual(structure_input.structure_zip, "")
         self.assertIn("No structure has been converted", structure_input.hint.value)
+
+        artifact_field = module._ModelArtifactField(
+            ui,
+            "Model or adapter:",
+            "Choose a local model",
+        )
+        loaded_metadata = []
+        artifact_field.on_loaded(loaded_metadata.append)
+        artifact_field.source.value = artifact_field.HUGGING_FACE
+        self.assertEqual(artifact_field.local.path.layout.display, "none")
+        self.assertIsNone(artifact_field.repo_id.layout.display)
+        artifact_field.repo_id.value = "Example/Community-ProSST"
+        artifact_field.revision.value = "v1"
+        artifact_field._load_community_model()
+        self.assertEqual(artifact_field.value, "/tmp/community-adapter")
+        self.assertEqual(loaded_metadata[0]["artifact_type"], "lora")
+        artifact_field.set_visible(False)
+        self.assertEqual(artifact_field.source.layout.display, "none")
+        self.assertEqual(artifact_field.repo_id.layout.display, "none")
 
         workflow.last_structure = {"sequence": "ACD"}
         structure_input = module._StructureInput(ui)
@@ -3366,6 +3427,16 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             for item in training_items
             if getattr(item, "description", "") == "Initial checkpoint:"
         )
+        initial_model_source = next(
+            item
+            for item in training_items
+            if getattr(item, "description", "") == "Model source:"
+        )
+        initial_repo_id = next(
+            item
+            for item in training_items
+            if getattr(item, "description", "") == "Repository ID:"
+        )
         exact_resume = next(
             item
             for item in training_items
@@ -3387,11 +3458,18 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             ],
         )
         self.assertEqual(initial_checkpoint.layout.display, "none")
+        self.assertEqual(initial_model_source.layout.display, "none")
         self.assertEqual(exact_resume.layout.display, "none")
         self.assertEqual(save_training_state.layout.display, "none")
         training_start.value = "checkpoint"
         self.assertIsNone(initial_checkpoint.layout.display)
+        self.assertIsNone(initial_model_source.layout.display)
         self.assertIsNone(exact_resume.layout.display)
+        initial_model_source.value = "huggingface"
+        self.assertEqual(initial_checkpoint.layout.display, "none")
+        self.assertIsNone(initial_repo_id.layout.display)
+        initial_model_source.value = "local"
+        self.assertIsNone(initial_checkpoint.layout.display)
         self.assertTrue(
             any(
                 "additional epochs" in str(getattr(item, "value", ""))
@@ -3400,6 +3478,7 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         )
         training_start.value = "fresh"
         self.assertEqual(initial_checkpoint.layout.display, "none")
+        self.assertEqual(initial_model_source.layout.display, "none")
         self.assertEqual(exact_resume.layout.display, "none")
         self.assertEqual(
             list(training_method.options),
@@ -3473,6 +3552,16 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             for item in prediction_items
             if getattr(item, "description", "") == "Model or adapter:"
         )
+        prediction_model_source = next(
+            item
+            for item in prediction_items
+            if getattr(item, "description", "") == "Model source:"
+        )
+        prediction_repo_id = next(
+            item
+            for item in prediction_items
+            if getattr(item, "description", "") == "Repository ID:"
+        )
         prediction_structure = next(
             item
             for item in prediction_items
@@ -3481,6 +3570,11 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         self.assertEqual(prediction_task.value, "token_classification")
         self.assertEqual(prediction_categories.value, 3)
         self.assertIn("LoRA ZIP", prediction_model_artifact.placeholder)
+        prediction_model_source.value = "huggingface"
+        self.assertEqual(prediction_model_artifact.layout.display, "none")
+        self.assertIsNone(prediction_repo_id.layout.display)
+        prediction_model_source.value = "local"
+        self.assertIsNone(prediction_model_artifact.layout.display)
         self.assertTrue(
             any(
                 "aligned one-to-one with the input residues"

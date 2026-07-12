@@ -191,6 +191,137 @@ class _UploadField:
             self.upload_button.disabled = False
 
 
+class _ModelArtifactField:
+    LOCAL = "local"
+    HUGGING_FACE = "huggingface"
+
+    def __init__(self, ui, description, placeholder):
+        self.ui = ui
+        self.visible = True
+        self.downloaded_path = ""
+        self.metadata = None
+        self.loaded_callback = None
+        widgets = ui.widgets
+        self.source = widgets.ToggleButtons(
+            options=[
+                ("Upload / Colab path", self.LOCAL),
+                ("Hugging Face repo", self.HUGGING_FACE),
+            ],
+            value=self.LOCAL,
+            description="Model source:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width=ui.WIDTH, height=ui.HEIGHT),
+        )
+        self.local = _UploadField(ui, description, placeholder)
+        self.repo_id = widgets.Text(
+            value="",
+            placeholder="owner/ColabProSST-model",
+            description="Repository ID:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width=ui.WIDTH, height=ui.HEIGHT),
+        )
+        self.revision = widgets.Text(
+            value="",
+            placeholder="Optional branch, tag, or commit; default: main",
+            description="Revision:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width=ui.WIDTH, height=ui.HEIGHT),
+        )
+        self.load_button = widgets.Button(
+            description="Load community model",
+            button_style="info",
+            layout=widgets.Layout(width=ui.WIDTH, height=ui.HEIGHT),
+        )
+        self.community_link = widgets.HTML(
+            value=(
+                "Browse <a href='https://huggingface.co/SaProtHub' "
+                "target='_blank'>SaprotHub</a> or use the "
+                "<a href='https://huggingface.co/spaces/SaProtHub/"
+                "SaprotHub-search' target='_blank'>SaprotHub search engine</a>."
+            ),
+            layout=widgets.Layout(width="100%", max_width=ui.GUIDE_WIDTH),
+        )
+        self.load_output = widgets.Output(
+            layout=widgets.Layout(width="100%", max_width=ui.GUIDE_WIDTH)
+        )
+        self.items = [
+            self.source,
+            *self.local.items,
+            self.repo_id,
+            self.revision,
+            self.load_button,
+            self.community_link,
+            self.load_output,
+        ]
+        self.source.observe(self._update, names="value")
+        self.repo_id.observe(self._invalidate, names="value")
+        self.revision.observe(self._invalidate, names="value")
+        self.load_button.on_click(
+            lambda _button: ui._start_task(
+                self.load_button,
+                self.load_output,
+                self._load_community_model,
+            )
+        )
+        self._update()
+
+    @property
+    def value(self):
+        if self.source.value == self.HUGGING_FACE:
+            return self.downloaded_path
+        return self.local.value
+
+    @value.setter
+    def value(self, path):
+        self.local.value = path
+
+    def set_visible(self, visible):
+        self.visible = bool(visible)
+        self._update()
+
+    def set_local_copy(self, description, placeholder):
+        self.local.path.description = description
+        self.local.path.placeholder = placeholder
+
+    def on_loaded(self, callback):
+        self.loaded_callback = callback
+
+    def _invalidate(self, _change=None):
+        self.downloaded_path = ""
+        self.metadata = None
+
+    def _update(self, _change=None):
+        self.source.layout.display = None if self.visible else "none"
+        show_local = self.visible and self.source.value == self.LOCAL
+        show_hf = self.visible and self.source.value == self.HUGGING_FACE
+        self.local.set_visible(show_local)
+        for item in [
+            self.repo_id,
+            self.revision,
+            self.load_button,
+            self.community_link,
+            self.load_output,
+        ]:
+            item.layout.display = None if show_hf else "none"
+
+    def _load_community_model(self):
+        if not self.repo_id.value.strip():
+            raise ValueError("Enter a Hugging Face repository ID.")
+        print("Downloading and inspecting community model...")
+        result = self.ui.workflow.download_community_checkpoint(
+            repo_id=self.repo_id.value,
+            revision=self.revision.value,
+        )
+        self.downloaded_path = result["artifact_path"]
+        self.metadata = result
+        print("loaded artifact:", result["artifact_path"])
+        print("artifact type:", result["artifact_type"])
+        print("task:", result["task_type"])
+        print("base model:", result["model_path"])
+        if self.loaded_callback is not None:
+            self.loaded_callback(result)
+
+
 class _StructureInput:
     TOKENS = "tokens"
     REUSE = "reuse"
@@ -461,6 +592,40 @@ class ColabProSSTUI:
             description="Base model:",
             layout=self.widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
         )
+
+    def _apply_artifact_metadata(
+        self,
+        metadata,
+        task_widget,
+        model_widget,
+        num_labels_widget,
+        training_method_widget=None,
+    ):
+        task_values = {value for _label, value in task_widget.options}
+        model_values = {value for _label, value in model_widget.options}
+        if metadata["task_type"] not in task_values:
+            raise ValueError(
+                f"Unsupported artifact task: {metadata['task_type']}."
+            )
+        if metadata["model_path"] not in model_values:
+            raise ValueError(
+                "This ColabProSST interface supports community artifacts based "
+                "on the official ProSST family only; unsupported base model: "
+                f"{metadata['model_path']}."
+            )
+        task_widget.value = metadata["task_type"]
+        model_widget.value = metadata["model_path"]
+        if metadata.get("num_labels") is not None:
+            num_labels_widget.value = int(metadata["num_labels"])
+        if training_method_widget is not None:
+            training_method_widget.value = (
+                "lora" if metadata["artifact_type"] == "lora" else "full"
+            )
+        self.latest_checkpoint = metadata["artifact_path"]
+        self.latest_model_path = metadata["model_path"]
+        self.latest_task_type = metadata["task_type"]
+        if metadata.get("num_labels") is not None:
+            self.latest_num_labels = int(metadata["num_labels"])
 
     def _task_dropdown(self, value="classification"):
         return self.widgets.Dropdown(
@@ -843,7 +1008,7 @@ class ColabProSSTUI:
             style={"description_width": "initial"},
             layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
         )
-        initial_checkpoint = _UploadField(
+        initial_checkpoint = _ModelArtifactField(
             self,
             "Initial checkpoint:",
             "Path to a compatible ColabProSST .pt checkpoint",
@@ -992,13 +1157,11 @@ class ColabProSSTUI:
             checkpoint_help.value = (
                 lora_checkpoint_help if use_lora else full_checkpoint_help
             )
-            initial_checkpoint.path.description = (
-                "Initial adapter:" if use_lora else "Initial checkpoint:"
-            )
-            initial_checkpoint.path.placeholder = (
+            initial_checkpoint.set_local_copy(
+                "Initial adapter:" if use_lora else "Initial checkpoint:",
                 "Path to a LoRA adapter directory or ZIP"
                 if use_lora
-                else "Path to a compatible ColabProSST .pt checkpoint"
+                else "Path to a compatible ColabProSST .pt checkpoint",
             )
             show_new_lora_config = use_lora and not use_checkpoint
             for item in [lora_rank, lora_alpha, lora_dropout]:
@@ -1022,6 +1185,16 @@ class ColabProSSTUI:
             )
             if not use_checkpoint:
                 resume_optimizer_state.value = False
+
+        def apply_initial_artifact(metadata):
+            self._apply_artifact_metadata(
+                metadata,
+                task_type,
+                model,
+                num_labels,
+                training_method,
+            )
+            training_start.value = "checkpoint"
 
         def train():
             if not csv_input.value:
@@ -1101,6 +1274,7 @@ class ColabProSSTUI:
 
         update_task({"new": task_type.value})
         task_type.observe(update_task, names="value")
+        initial_checkpoint.on_loaded(apply_initial_artifact)
         update_training_controls()
         training_start.observe(update_training_controls, names="value")
         training_method.observe(update_training_controls, names="value")
@@ -1245,7 +1419,7 @@ class ColabProSSTUI:
             overflow="visible",
         )
         model = self._model_dropdown()
-        checkpoint = _UploadField(
+        checkpoint = _ModelArtifactField(
             self,
             "Model or adapter:",
             "Path to a .pt checkpoint, LoRA adapter directory, or LoRA ZIP",
@@ -1319,6 +1493,14 @@ class ColabProSSTUI:
             self.latest_num_labels = num_labels.value
             self.display(result.head())
 
+        checkpoint.on_loaded(
+            lambda metadata: self._apply_artifact_metadata(
+                metadata,
+                task_type,
+                model,
+                num_labels,
+            )
+        )
         update_task({"new": task_type.value})
         task_type.observe(update_task, names="value")
         start_button.on_click(
@@ -1693,8 +1875,8 @@ class ColabProSSTUI:
         )
         checkpoint = _UploadField(
             self,
-            "Model checkpoint:",
-            "Path to a trained ColabProSST .pt checkpoint",
+            "Model or adapter:",
+            "Path to a ColabProSST .pt, LoRA directory, or LoRA ZIP",
         )
         checkpoint.value = self.latest_checkpoint
         model = self._model_dropdown()
@@ -1738,7 +1920,9 @@ class ColabProSSTUI:
 
         def upload():
             if not checkpoint.value:
-                raise ValueError("Upload a model checkpoint or enter its path.")
+                raise ValueError(
+                    "Upload a model checkpoint/adapter or enter its path."
+                )
             print("Uploading model to Hugging Face...")
             model_spec = get_prosst_model_spec(model.value)
             package = self.workflow.upload_checkpoint_to_hf(

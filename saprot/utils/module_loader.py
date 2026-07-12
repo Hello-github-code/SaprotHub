@@ -70,6 +70,15 @@ def my_load_model(config):
       from model.prosst.prosst_token_classification_model import ProSSTTokenClassificationModel
       return ProSSTTokenClassificationModel(**model_config)
 
+    if model_type == "prosst/prosst_pair_classification_model":
+      from model.prosst.prosst_pair_classification_model import ProSSTPairClassificationModel
+      return ProSSTPairClassificationModel(**model_config)
+
+    if model_type == "prosst/prosst_pair_regression_model":
+      if 'num_labels' in model_config: del model_config['num_labels']
+      from model.prosst.prosst_pair_regression_model import ProSSTPairRegressionModel
+      return ProSSTPairRegressionModel(**model_config)
+
     if model_type == "prosst/prosst_mutation_model":
       from model.prosst.prosst_mutation_model import ProSSTMutationModel
       return ProSSTMutationModel(**model_config)

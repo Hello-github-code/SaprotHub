@@ -22,6 +22,12 @@ try:
     )
     from saprot.model.prosst.prosst_classification_model import ProSSTClassificationModel
     from saprot.model.prosst.prosst_regression_model import ProSSTRegressionModel
+    from saprot.model.prosst.prosst_pair_classification_model import (
+        ProSSTPairClassificationModel,
+    )
+    from saprot.model.prosst.prosst_pair_regression_model import (
+        ProSSTPairRegressionModel,
+    )
     from saprot.model.prosst.prosst_token_classification_model import (
         ProSSTTokenClassificationModel,
     )
@@ -35,10 +41,29 @@ except ImportError:
     )
     from model.prosst.prosst_classification_model import ProSSTClassificationModel
     from model.prosst.prosst_regression_model import ProSSTRegressionModel
+    from model.prosst.prosst_pair_classification_model import (
+        ProSSTPairClassificationModel,
+    )
+    from model.prosst.prosst_pair_regression_model import (
+        ProSSTPairRegressionModel,
+    )
     from model.prosst.prosst_token_classification_model import (
         ProSSTTokenClassificationModel,
     )
     from model.prosst.specs import resolve_structure_vocab_size
+
+
+PAIR_TASK_TYPES = {"pair_classification", "pair_regression"}
+CLASSIFICATION_TASK_TYPES = {
+    "classification",
+    "token_classification",
+    "pair_classification",
+}
+SUPPORTED_TASK_TYPES = {
+    *CLASSIFICATION_TASK_TYPES,
+    "regression",
+    "pair_regression",
+}
 
 
 def _has_value(value: Any) -> bool:
@@ -58,25 +83,38 @@ def _row_structure_entry(
     row: pd.Series,
     csv_dir: Path,
     structure_base_dir: str = None,
+    pair_index: Optional[int] = None,
 ) -> Dict[str, Any]:
     lower_columns = {column.lower(): column for column in row.index}
-    structure_column = lower_columns.get("structure_tokens")
-    if structure_column is not None and _has_value(row[structure_column]):
-        entry = {"structure_tokens": row[structure_column]}
-        vocab_column = lower_columns.get("structure_vocab_size")
-        if vocab_column is not None and _has_value(row[vocab_column]):
-            entry["structure_vocab_size"] = row[vocab_column]
+    suffix = f"_{pair_index}" if pair_index is not None else ""
+    structure_column = lower_columns.get(f"structure_tokens{suffix}")
+    vocab_columns = [f"structure_vocab_size{suffix}"]
+    if pair_index is not None:
+        vocab_columns.append("structure_vocab_size")
+
+    def add_vocab_metadata(entry):
+        for name in vocab_columns:
+            vocab_column = lower_columns.get(name)
+            if vocab_column is not None and _has_value(row[vocab_column]):
+                entry["structure_vocab_size"] = row[vocab_column]
+                break
         return entry
 
+    if structure_column is not None and _has_value(row[structure_column]):
+        return add_vocab_metadata(
+            {"structure_tokens": row[structure_column]}
+        )
+
     path_column = None
-    for name in ["structure_path", "pdb_path"]:
+    for name in [f"structure_path{suffix}", f"pdb_path{suffix}"]:
         if name in lower_columns and _has_value(row[lower_columns[name]]):
             path_column = lower_columns[name]
             break
     if path_column is None:
+        subject = f"pair protein {pair_index}" if pair_index is not None else "row"
         raise ValueError(
-            "Each ProSST prediction row needs structure_tokens, structure_path, "
-            "or pdb_path."
+            f"Each ProSST prediction {subject} needs structure_tokens{suffix}, "
+            f"structure_path{suffix}, or pdb_path{suffix}."
         )
 
     structure_path = Path(str(row[path_column]).strip())
@@ -87,16 +125,12 @@ def _row_structure_entry(
         structure_path = next((candidate for candidate in candidates if candidate.exists()), candidates[-1])
 
     entry = {"pdb_path": str(structure_path)}
-    for name in ["chain_id", "chain"]:
+    for name in [f"chain_id{suffix}", f"chain{suffix}"]:
         column = lower_columns.get(name)
         if column is not None and _has_value(row[column]):
             entry["chain_id"] = str(row[column]).strip()
             break
-    vocab_column = lower_columns.get("structure_vocab_size")
-    if vocab_column is not None and _has_value(row[vocab_column]):
-        entry["structure_vocab_size"] = row[vocab_column]
-
-    return entry
+    return add_vocab_metadata(entry)
 
 
 def _prepare_batch(
@@ -163,13 +197,17 @@ def _load_model(
             num_labels=num_labels,
             **common_kwargs,
         )
+    elif task_type == "pair_classification":
+        model = ProSSTPairClassificationModel(
+            num_labels=num_labels,
+            **common_kwargs,
+        )
     elif task_type == "regression":
         model = ProSSTRegressionModel(**common_kwargs)
+    elif task_type == "pair_regression":
+        model = ProSSTPairRegressionModel(**common_kwargs)
     else:
-        raise ValueError(
-            "task_type must be classification, regression, or "
-            "token_classification."
-        )
+        raise ValueError(f"Unsupported ProSST prediction task_type: {task_type}.")
 
     model = model.to(device)
     model.eval()
@@ -201,7 +239,7 @@ def validate_checkpoint_compatibility(
         "structure_vocab_size": int(structure_vocab_size),
     }
     if (
-        task_type in {"classification", "token_classification"}
+        task_type in CLASSIFICATION_TASK_TYPES
         and num_labels is not None
     ):
         expected["num_labels"] = int(num_labels)
@@ -234,18 +272,13 @@ def predict_csv(
     structure_base_dir: str = None,
     load_pretrained: bool = False,
 ) -> pd.DataFrame:
-    if task_type not in {
-        "classification",
-        "regression",
-        "token_classification",
-    }:
+    if task_type not in SUPPORTED_TASK_TYPES:
         raise ValueError(
-            "task_type must be classification, regression, or "
-            "token_classification."
+            f"Unsupported ProSST prediction task_type: {task_type}."
         )
     if batch_size < 1:
         raise ValueError("batch_size must be at least 1.")
-    if task_type in {"classification", "token_classification"} and num_labels < 2:
+    if task_type in CLASSIFICATION_TASK_TYPES and num_labels < 2:
         raise ValueError("Classification num_labels must be at least 2.")
     structure_vocab_size = resolve_structure_vocab_size(
         model_path,
@@ -268,28 +301,65 @@ def predict_csv(
     df = pd.read_csv(input_csv)
     if df.empty:
         raise ValueError("ProSST prediction CSV contains no rows.")
-    sequence_column = _sequence_column(df.columns)
+    is_pair_task = task_type in PAIR_TASK_TYPES
+    if is_pair_task:
+        lower_columns = {column.lower(): column for column in df.columns}
+        missing = [
+            column
+            for column in ["sequence_1", "sequence_2"]
+            if column not in lower_columns
+        ]
+        if missing:
+            raise ValueError(
+                f"ProSST pair prediction CSV missing columns: {missing}."
+            )
+        sequence_columns = [
+            lower_columns["sequence_1"],
+            lower_columns["sequence_2"],
+        ]
+    else:
+        sequence_columns = [_sequence_column(df.columns)]
     csv_dir = Path(input_csv).resolve().parent
 
-    sequences: List[str] = []
-    structure_tokens_list: List[List[int]] = []
+    sequence_groups: List[List[str]] = [[] for _column in sequence_columns]
+    structure_groups: List[List[List[int]]] = [
+        [] for _column in sequence_columns
+    ]
     for row_idx, row in df.iterrows():
-        sequence = str(row[sequence_column]).strip().upper()
-        if not sequence or sequence == "NAN":
-            raise ValueError(f"ProSST prediction row {row_idx} has an empty sequence.")
-        entry = _row_structure_entry(
-            row,
-            csv_dir,
-            structure_base_dir=structure_base_dir,
-        )
-        structure_tokens = get_structure_tokens_from_entry(
-            entry,
-            cache_dir=cache_dir,
-            structure_vocab_size=structure_vocab_size,
-        )
-        validate_sequence_and_structure(sequence, structure_tokens, context=f"row {row_idx}")
-        sequences.append(sequence)
-        structure_tokens_list.append([int(token) for token in structure_tokens])
+        for group_idx, sequence_column in enumerate(sequence_columns):
+            sequence = str(row[sequence_column]).strip().upper()
+            pair_index = group_idx + 1 if is_pair_task else None
+            if not sequence or sequence == "NAN":
+                subject = f" pair protein {pair_index}" if pair_index else ""
+                raise ValueError(
+                    f"ProSST prediction row {row_idx}{subject} has an empty sequence."
+                )
+            entry = _row_structure_entry(
+                row,
+                csv_dir,
+                structure_base_dir=structure_base_dir,
+                pair_index=pair_index,
+            )
+            structure_tokens = get_structure_tokens_from_entry(
+                entry,
+                cache_dir=cache_dir,
+                structure_vocab_size=structure_vocab_size,
+            )
+            context = f"row {row_idx}"
+            if pair_index is not None:
+                context += f" pair protein {pair_index}"
+            validate_sequence_and_structure(
+                sequence,
+                structure_tokens,
+                context=context,
+            )
+            sequence_groups[group_idx].append(sequence)
+            structure_groups[group_idx].append(
+                [int(token) for token in structure_tokens]
+            )
+
+    sequences = sequence_groups[0]
+    structure_tokens_list = structure_groups[0]
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     model = _load_model(
@@ -314,7 +384,18 @@ def predict_csv(
             structure_vocab_size=structure_vocab_size,
             device=device,
         )
-        logits = model.forward(batch_inputs).detach().cpu()
+        if is_pair_task:
+            batch_inputs_2 = _prepare_batch(
+                tokenizer,
+                sequence_groups[1][start:stop],
+                structure_groups[1][start:stop],
+                max_length=max_length,
+                structure_vocab_size=structure_vocab_size,
+                device=device,
+            )
+            logits = model.forward(batch_inputs, batch_inputs_2).detach().cpu()
+        else:
+            logits = model.forward(batch_inputs).detach().cpu()
         if task_type == "token_classification":
             for row_idx, sequence in enumerate(sequences[start:stop]):
                 residue_count = min(len(sequence), max_length)
@@ -369,12 +450,12 @@ def predict_csv(
             ]
     else:
         outputs = torch.cat(output_chunks, dim=0)
-    if task_type == "classification":
+    if task_type in {"classification", "pair_classification"}:
         probabilities = torch.softmax(outputs, dim=-1)
         result["pred"] = probabilities.argmax(dim=-1).numpy()
         for idx in range(probabilities.shape[-1]):
             result[f"prob_{idx}"] = probabilities[:, idx].numpy()
-    elif task_type == "regression":
+    elif task_type in {"regression", "pair_regression"}:
         result["pred"] = outputs.reshape(-1).numpy()
 
     result.to_csv(output_csv, index=False)
@@ -388,7 +469,7 @@ def get_args():
     parser.add_argument(
         "--task_type",
         required=True,
-        choices=["classification", "regression", "token_classification"],
+        choices=sorted(SUPPORTED_TASK_TYPES),
     )
     parser.add_argument("--checkpoint_path", required=True)
     parser.add_argument("--model_path", default="AI4Protein/ProSST-2048")

@@ -946,6 +946,107 @@ class ColabProSSTPairDataTest(unittest.TestCase):
         self.assertEqual(regression_labels["labels"].dtype, torch.float)
 
 
+class ColabProSSTPairModelTest(unittest.TestCase):
+    def test_pair_forward_uses_both_pooled_representations(self):
+        import torch
+
+        from saprot.model.prosst.pair_base import ProSSTPairBaseModel
+
+        model = object.__new__(ProSSTPairBaseModel)
+        torch.nn.Module.__init__(model)
+        model.model = torch.nn.Module()
+        model.model.classifier = torch.nn.Linear(4, 1, bias=False)
+        model.model.classifier.weight.data.copy_(
+            torch.tensor([[1.0, 10.0, 100.0, 1000.0]])
+        )
+        model.get_pooled_representations = lambda inputs: inputs["pooled"]
+
+        output = model.forward(
+            {"pooled": torch.tensor([[1.0, 2.0]])},
+            {"pooled": torch.tensor([[3.0, 4.0]])},
+        )
+
+        self.assertEqual(output.shape, (1, 1))
+        self.assertEqual(output.item(), 4321.0)
+
+    def test_pair_classification_metadata_records_task_and_categories(self):
+        from saprot.model.prosst.prosst_pair_classification_model import (
+            ProSSTPairClassificationModel,
+        )
+
+        model = object.__new__(ProSSTPairClassificationModel)
+        object.__setattr__(model, "task", "pair_classification")
+        object.__setattr__(model, "config_path", "AI4Protein/ProSST-512")
+        object.__setattr__(model, "structure_vocab_size", 512)
+        object.__setattr__(model, "num_labels", 4)
+
+        self.assertEqual(
+            model._checkpoint_metadata()["colabprosst"],
+            {
+                "base_model": "AI4Protein/ProSST-512",
+                "structure_vocab_size": 512,
+                "task": "pair_classification",
+                "num_labels": 4,
+            },
+        )
+
+    def test_pair_losses_use_expected_label_types_and_shapes(self):
+        import torch
+
+        from saprot.model.prosst.prosst_pair_classification_model import (
+            ProSSTPairClassificationModel,
+        )
+        from saprot.model.prosst.prosst_pair_regression_model import (
+            ProSSTPairRegressionModel,
+        )
+
+        class CaptureMetric:
+            def set_dtype(self, _dtype):
+                return self
+
+            def update(self, predictions, targets):
+                self.predictions = predictions
+                self.targets = targets
+
+        classification = object.__new__(ProSSTPairClassificationModel)
+        torch.nn.Module.__init__(classification)
+        classification.metrics = {
+            "valid": {"valid_acc": CaptureMetric()},
+        }
+        logits = torch.tensor([[1.0, 3.0], [4.0, 0.0]])
+        category_ids = torch.tensor([1, 0], dtype=torch.long)
+        classification_loss = classification.loss_func(
+            "valid",
+            logits,
+            {"labels": category_ids},
+        )
+        self.assertTrue(
+            torch.allclose(
+                classification_loss,
+                torch.nn.functional.cross_entropy(logits, category_ids),
+            )
+        )
+
+        regression = object.__new__(ProSSTPairRegressionModel)
+        torch.nn.Module.__init__(regression)
+        metric = CaptureMetric()
+        regression.metrics = {"valid": {"valid_loss": metric}}
+        predictions = torch.tensor([1.5, -0.5])
+        targets = torch.tensor([1.0, 0.0])
+        regression_loss = regression.loss_func(
+            "valid",
+            predictions,
+            {"labels": targets},
+        )
+        self.assertTrue(
+            torch.allclose(
+                regression_loss,
+                torch.nn.functional.mse_loss(predictions, targets),
+            )
+        )
+        self.assertEqual(metric.targets.shape, (2,))
+
+
 class ColabProSSTWorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -1488,6 +1589,96 @@ class ColabProSSTInferenceTest(unittest.TestCase):
             self.assertIn("prob_1", result.columns)
             self.assertTrue(output_csv.exists())
 
+    def test_pair_prediction_prepares_both_sequence_structure_inputs(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            input_csv = root / "pair-prediction.csv"
+            output_csv = root / "pair-predictions.csv"
+            checkpoint = root / "model.pt"
+            checkpoint.touch()
+            self.pd.DataFrame(
+                [
+                    {
+                        "sequence_1": "ACD",
+                        "sequence_2": "AC",
+                        "structure_tokens_1": "0 1 2",
+                        "structure_tokens_2": "3 4",
+                    },
+                    {
+                        "sequence_1": "AC",
+                        "sequence_2": "ACE",
+                        "structure_tokens_1": "5 6",
+                        "structure_tokens_2": "7 8 9",
+                    },
+                ]
+            ).to_csv(input_csv, index=False)
+
+            captured = {}
+
+            class FakePairPredictionModel:
+                def forward(inner_self, inputs_1, inputs_2):
+                    captured["inputs_1"] = inputs_1
+                    captured["inputs_2"] = inputs_2
+                    return self.torch.tensor([[0.0, 2.0], [3.0, 1.0]])
+
+            with patch.object(
+                self.prediction.AutoTokenizer,
+                "from_pretrained",
+                return_value=self.FakeTokenizer(),
+            ), patch.object(
+                self.prediction,
+                "_load_model",
+                return_value=FakePairPredictionModel(),
+            ):
+                result = self.prediction.predict_csv(
+                    input_csv=str(input_csv),
+                    output_csv=str(output_csv),
+                    task_type="pair_classification",
+                    checkpoint_path=str(checkpoint),
+                    num_labels=2,
+                    batch_size=2,
+                    model_path="AI4Protein/ProSST-20",
+                    device="cpu",
+                )
+
+            self.assertEqual(result["pred"].tolist(), [1, 0])
+            self.assertEqual(
+                captured["inputs_1"]["ss_input_ids"].tolist(),
+                [[1, 3, 4, 5, 2], [1, 8, 9, 2, 0]],
+            )
+            self.assertEqual(
+                captured["inputs_2"]["ss_input_ids"].tolist(),
+                [[1, 6, 7, 2, 0], [1, 10, 11, 12, 2]],
+            )
+            self.assertTrue(output_csv.exists())
+
+    def test_pair_prediction_requires_the_second_structure(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            input_csv = root / "incomplete-pair.csv"
+            output_csv = root / "pair-predictions.csv"
+            checkpoint = root / "model.pt"
+            checkpoint.touch()
+            self.pd.DataFrame(
+                [
+                    {
+                        "sequence_1": "ACD",
+                        "sequence_2": "AC",
+                        "structure_tokens_1": "0 1 2",
+                    }
+                ]
+            ).to_csv(input_csv, index=False)
+
+            with self.assertRaisesRegex(ValueError, "pair protein 2"):
+                self.prediction.predict_csv(
+                    input_csv=str(input_csv),
+                    output_csv=str(output_csv),
+                    task_type="pair_regression",
+                    checkpoint_path=str(checkpoint),
+                    model_path="AI4Protein/ProSST-20",
+                    device="cpu",
+                )
+
     def test_residue_prediction_preserves_each_sequences_token_count(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
@@ -1621,6 +1812,8 @@ class ColabProSSTInferenceTest(unittest.TestCase):
             ("classification", "ProSSTClassificationModel"),
             ("regression", "ProSSTRegressionModel"),
             ("token_classification", "ProSSTTokenClassificationModel"),
+            ("pair_classification", "ProSSTPairClassificationModel"),
+            ("pair_regression", "ProSSTPairRegressionModel"),
         ]
         for task_type, constructor_name in cases:
             with self.subTest(task_type=task_type), patch.object(

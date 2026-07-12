@@ -29,6 +29,8 @@ class ProSSTBaseModel(AbstractModel):
             "classification",
             "regression",
             "token_classification",
+            "pair_classification",
+            "pair_regression",
             "lm",
             "base",
         ]

@@ -3408,6 +3408,12 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         self.assertTrue(structure_input.reuse_latest)
         self.assertEqual(structure_input.structure_zip, "")
         self.assertIn("No structure has been converted", structure_input.hint.value)
+        self.assertEqual(len(structure_input.display_items), 1)
+        structure_group = structure_input.display_items[0]
+        self.assertEqual(tuple(structure_group.children), tuple(structure_input.items))
+        self.assertEqual(structure_group.layout.grid_gap, "4px")
+        self.assertEqual(structure_group.layout.margin, "0 0 18px 0")
+        self.assertEqual(structure_group.layout.max_width, ui.GUIDE_WIDTH)
 
         artifact_field = module._ModelArtifactField(
             ui,
@@ -3531,7 +3537,14 @@ class ColabProSSTWidgetTest(unittest.TestCase):
 
         rendered.clear()
         ui._embedding_page()
-        embedding_items = rendered[-1]
+        def flatten_widgets(items):
+            for item in items:
+                yield item
+                children = getattr(item, "children", ())
+                if children:
+                    yield from flatten_widgets(children)
+
+        embedding_items = list(flatten_widgets(rendered[-1]))
         embedding_level = next(
             item
             for item in embedding_items
@@ -3583,7 +3596,7 @@ class ColabProSSTWidgetTest(unittest.TestCase):
 
         rendered.clear()
         ui._saturation_page()
-        saturation_items = rendered[-1]
+        saturation_items = list(flatten_widgets(rendered[-1]))
         self.assertTrue(
             any(
                 "exactly one protein row"
@@ -3602,7 +3615,7 @@ class ColabProSSTWidgetTest(unittest.TestCase):
 
         rendered.clear()
         ui._training_page()
-        training_items = rendered[-1]
+        training_items = list(flatten_widgets(rendered[-1]))
         training_task = next(
             item
             for item in training_items
@@ -3757,7 +3770,7 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         ui.latest_task_type = "token_classification"
         ui.latest_num_labels = 3
         ui._property_prediction_page()
-        prediction_items = rendered[-1]
+        prediction_items = list(flatten_widgets(rendered[-1]))
         prediction_task = next(
             item
             for item in prediction_items

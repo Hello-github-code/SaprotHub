@@ -382,6 +382,18 @@ class _StructureInput:
             "ZIP containing PDB/mmCIF files referenced by the CSV",
         )
         self.items = [self.mode, self.hint, *self.zip_upload.items]
+        self.display_items = [
+            widgets.VBox(
+                self.items,
+                layout=widgets.Layout(
+                    width="100%",
+                    max_width=ui.GUIDE_WIDTH,
+                    grid_gap="4px",
+                    margin="0 0 18px 0",
+                    overflow="visible",
+                ),
+            )
+        ]
         self.mode.observe(self._update, names="value")
         self._update({"new": self.mode.value})
 
@@ -592,10 +604,22 @@ class ColabProSSTUI:
         )
 
     def _heading(self, text, level=2):
-        return self._html(f"<h{level}>{text}</h{level}>")
+        margin = "0 0 14px 0" if level == 2 else "18px 0 8px 0"
+        return self._html(
+            f"<h{level} style='margin:0'>{text}</h{level}>",
+            width="100%",
+            max_width=self.GUIDE_WIDTH,
+            margin=margin,
+            overflow="visible",
+        )
 
     def _separator(self):
-        return self._html("<h3>---------------------------------------------------------------------------</h3>")
+        return self._html(
+            "<hr style='border:0;border-top:1px solid #dadce0;margin:0'>",
+            width="100%",
+            max_width=self.GUIDE_WIDTH,
+            margin="18px 0 12px 0",
+        )
 
     def _button(self, description, width=None, style=""):
         return self.widgets.Button(
@@ -1372,7 +1396,7 @@ class ColabProSSTUI:
             self._heading("Dataset setting:", level=3),
             dataset_help,
             *csv_input.items,
-            *structure_input.items,
+            *structure_input.display_items,
             template_button,
             self._heading("Training hyper-parameters:", level=3),
             batch_size,
@@ -1589,7 +1613,7 @@ class ColabProSSTUI:
             ),
             self._heading("Input proteins:", level=3),
             *csv_input.items,
-            *structure_input.items,
+            *structure_input.display_items,
             batch_size,
             download,
             self._separator(),
@@ -1741,7 +1765,7 @@ class ColabProSSTUI:
             *embedding_artifact.items,
             self._heading("Input proteins:", level=3),
             *csv_input.items,
-            *structure_input.items,
+            *structure_input.display_items,
             batch_size,
             max_length,
             download,
@@ -1810,7 +1834,7 @@ class ColabProSSTUI:
             model,
             self._heading("Protein input:", level=3),
             *csv_input.items,
-            *structure_input.items,
+            *structure_input.display_items,
             download,
             self._separator(),
             start_button,
@@ -1879,7 +1903,7 @@ class ColabProSSTUI:
                 "<code>mutant</code>. Then choose one structure input method."
             ),
             *csv_input.items,
-            *structure_input.items,
+            *structure_input.display_items,
             download,
             self._separator(),
             start_button,

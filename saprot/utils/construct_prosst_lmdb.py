@@ -21,12 +21,17 @@ try:
         serialize_structure_tokens,
         validate_sequence_and_structure,
     )
+    from saprot.data.prosst_labels import (
+        parse_residue_labels,
+        validate_residue_labels,
+    )
 except ImportError:
     from data.pdb2prosst import (
         get_structure_tokens_from_entry,
         serialize_structure_tokens,
         validate_sequence_and_structure,
     )
+    from data.prosst_labels import parse_residue_labels, validate_residue_labels
 
 
 VALID_STAGES = {"train", "valid", "test"}
@@ -89,6 +94,15 @@ def _get_sequence_column(df: pd.DataFrame) -> str:
 
 
 def _get_label_column(df: pd.DataFrame, task_type: str) -> str:
+    if task_type == "token_classification":
+        if "residue_labels" in df.columns:
+            return "residue_labels"
+        if "label" in df.columns:
+            return "label"
+        raise ValueError(
+            "ProSST residue-level classification CSV must contain "
+            "`residue_labels` (or `label`)."
+        )
     if task_type == "regression" and "fitness" in df.columns:
         return "fitness"
     if "label" in df.columns:
@@ -158,8 +172,15 @@ def _build_sample(
     elif task_type == "regression":
         label = float(label)
         label_key = "fitness"
+    elif task_type == "token_classification":
+        label = parse_residue_labels(label)
+        validate_residue_labels(sequence, label, context=sequence[:20])
+        label_key = "label"
     else:
-        raise ValueError("ProSST LMDB construction supports classification/regression.")
+        raise ValueError(
+            "ProSST LMDB construction supports classification, regression, "
+            "and token_classification."
+        )
 
     sample = {
         "seq": sequence,
@@ -189,10 +210,18 @@ def construct_prosst_lmdb(
 
     Required columns:
         sequence,stage plus structure_tokens, structure_path, or pdb_path.
-        classification uses label; regression uses label or fitness.
+        classification uses label; regression uses label or fitness;
+        token_classification uses residue_labels or label.
     """
-    if task_type not in {"classification", "regression"}:
-        raise ValueError("ProSST v1 supports only classification and regression LMDBs.")
+    if task_type not in {
+        "classification",
+        "regression",
+        "token_classification",
+    }:
+        raise ValueError(
+            "Unsupported ProSST LMDB task_type. Expected classification, "
+            "regression, or token_classification."
+        )
 
     csv_path = Path(csv_file)
     df = pd.read_csv(csv_path)
@@ -250,7 +279,7 @@ def get_args():
     parser.add_argument(
         "--task_type",
         required=True,
-        choices=["classification", "regression"],
+        choices=["classification", "regression", "token_classification"],
     )
     parser.add_argument("--cache_dir", default=None)
     parser.add_argument("--structure_vocab_size", type=int, default=2048)

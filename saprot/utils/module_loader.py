@@ -121,6 +121,10 @@ def my_load_dataset(config):
       from dataset.prosst.prosst_regression_dataset import ProSSTRegressionDataset
       return ProSSTRegressionDataset(**dataset_config)
 
+    if dataset_type == "prosst/prosst_token_classification_dataset":
+      from dataset.prosst.prosst_token_classification_dataset import ProSSTTokenClassificationDataset
+      return ProSSTTokenClassificationDataset(**dataset_config)
+
     if dataset_type == "prosst/prosst_mutation_dataset":
       from dataset.prosst.prosst_mutation_dataset import ProSSTMutationDataset
       return ProSSTMutationDataset(**dataset_config)

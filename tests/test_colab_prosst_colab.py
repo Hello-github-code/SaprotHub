@@ -507,6 +507,161 @@ class ColabProSSTStructureRuntimeTest(unittest.TestCase):
                 delattr(controller_class, marker_name)
 
 
+class ColabProSSTResidueDataTest(unittest.TestCase):
+    def test_residue_label_parser_accepts_documented_formats(self):
+        from saprot.data.prosst_labels import parse_residue_labels
+
+        self.assertEqual(parse_residue_labels("0 1 -100 2"), [0, 1, -100, 2])
+        self.assertEqual(parse_residue_labels("0,1,2"), [0, 1, 2])
+        self.assertEqual(parse_residue_labels("[2, 1, 0]"), [2, 1, 0])
+        self.assertEqual(parse_residue_labels([1, 0]), [1, 0])
+
+        with self.assertRaisesRegex(ValueError, "integer category IDs"):
+            parse_residue_labels("0 1.5 2")
+        with self.assertRaisesRegex(ValueError, "use -100 only"):
+            parse_residue_labels("0 -1 2")
+
+    def test_token_classification_csv_builds_aligned_lmdb_samples(self):
+        import lmdb
+        import pandas as pd
+
+        from saprot.utils.construct_prosst_lmdb import construct_prosst_lmdb
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            csv_path = root / "residue-training.csv"
+            pd.DataFrame(
+                [
+                    {
+                        "sequence": "ACD",
+                        "residue_labels": "0 1 0",
+                        "stage": "train",
+                        "structure_tokens": "0 1 2",
+                    },
+                    {
+                        "sequence": "ACE",
+                        "residue_labels": "[1, -100, 0]",
+                        "stage": "valid",
+                        "structure_tokens": "3 4 5",
+                    },
+                    {
+                        "sequence": "ACF",
+                        "residue_labels": "1,1,0",
+                        "stage": "test",
+                        "structure_tokens": "6 7 8",
+                    },
+                ]
+            ).to_csv(csv_path, index=False)
+
+            construct_prosst_lmdb(
+                str(csv_path),
+                str(root / "LMDB"),
+                "residue-task",
+                "token_classification",
+                structure_vocab_size=20,
+            )
+
+            expected = {
+                "train": [0, 1, 0],
+                "valid": [1, -100, 0],
+                "test": [1, 1, 0],
+            }
+            for stage, expected_labels in expected.items():
+                env = lmdb.open(
+                    str(root / "LMDB" / "residue-task" / stage),
+                    readonly=True,
+                    lock=False,
+                )
+                try:
+                    with env.begin() as transaction:
+                        sample = json.loads(transaction.get(b"0").decode())
+                    self.assertEqual(sample["label"], expected_labels)
+                    self.assertEqual(sample["structure_vocab_size"], 20)
+                finally:
+                    env.close()
+
+    def test_token_classification_csv_rejects_misaligned_labels(self):
+        import pandas as pd
+
+        from saprot.utils.construct_prosst_lmdb import construct_prosst_lmdb
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            csv_path = root / "bad-residue-training.csv"
+            pd.DataFrame(
+                [
+                    {
+                        "sequence": "ACD",
+                        "residue_labels": "0 1",
+                        "stage": "train",
+                        "structure_tokens": "0 1 2",
+                    }
+                ]
+            ).to_csv(csv_path, index=False)
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "residue_labels length must match sequence length",
+            ):
+                construct_prosst_lmdb(
+                    str(csv_path),
+                    str(root / "LMDB"),
+                    "bad-residue-task",
+                    "token_classification",
+                    structure_vocab_size=20,
+                )
+
+    def test_token_classification_dataset_aligns_special_and_padding_tokens(self):
+        import torch
+
+        from saprot.dataset.prosst.prosst_token_classification_dataset import (
+            ProSSTTokenClassificationDataset,
+        )
+
+        class FakeTokenizer:
+            vocab = {"A": 3, "C": 4, "D": 5}
+
+            def batch_encode_plus(self, sequences, **_kwargs):
+                encoded = [
+                    [1, *[self.vocab[residue] for residue in sequence], 2]
+                    for sequence in sequences
+                ]
+                target_length = max(len(row) for row in encoded)
+                input_ids = [
+                    row + [0] * (target_length - len(row)) for row in encoded
+                ]
+                attention_mask = [
+                    [1] * len(row) + [0] * (target_length - len(row))
+                    for row in encoded
+                ]
+                return {
+                    "input_ids": torch.tensor(input_ids),
+                    "attention_mask": torch.tensor(attention_mask),
+                }
+
+        dataset = object.__new__(ProSSTTokenClassificationDataset)
+        dataset.tokenizer = FakeTokenizer()
+        dataset.structure_vocab_size = 20
+        dataset.max_length = 10
+
+        inputs, labels = dataset.collate_fn(
+            [
+                ("ACD", [0, 1, 2], [0, 1, -100]),
+                ("AC", [3, 4], [1, 0]),
+            ]
+        )
+
+        self.assertEqual(inputs["inputs"]["input_ids"].shape, (2, 5))
+        self.assertEqual(
+            inputs["inputs"]["ss_input_ids"].tolist(),
+            [[1, 3, 4, 5, 2], [1, 6, 7, 2, 0]],
+        )
+        self.assertEqual(
+            labels["labels"].tolist(),
+            [[-100, 0, 1, -100, -100], [-100, 1, 0, -100, -100]],
+        )
+
+
 class ColabProSSTWorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

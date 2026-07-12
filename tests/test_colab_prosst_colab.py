@@ -73,6 +73,7 @@ class ColabProSSTNotebookTest(unittest.TestCase):
             "single-site saturation mutagenesis with heatmaps",
             introduction,
         )
+        self.assertIn("checkpoint continuation", introduction)
         self.assertIn("ColabSaprot", introduction)
         self.assertIn("ColabSeprot", introduction)
         self.assertIn("ColabESMC", introduction)
@@ -2943,6 +2944,51 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             for item in training_items
             if getattr(item, "description", "") == "Structure input:"
         )
+        training_start = next(
+            item
+            for item in training_items
+            if getattr(item, "description", "") == "Training start:"
+        )
+        initial_checkpoint = next(
+            item
+            for item in training_items
+            if getattr(item, "description", "") == "Initial checkpoint:"
+        )
+        exact_resume = next(
+            item
+            for item in training_items
+            if getattr(item, "description", "")
+            == "Restore optimizer and scheduler (exact resume)"
+        )
+        save_training_state = next(
+            item
+            for item in training_items
+            if getattr(item, "description", "").startswith(
+                "Save optimizer state for future exact resume"
+            )
+        )
+        self.assertEqual(
+            list(training_start.options),
+            [
+                ("Fresh official model", "fresh"),
+                ("Continue from checkpoint", "checkpoint"),
+            ],
+        )
+        self.assertEqual(initial_checkpoint.layout.display, "none")
+        self.assertEqual(exact_resume.layout.display, "none")
+        self.assertEqual(save_training_state.layout.display, "none")
+        training_start.value = "checkpoint"
+        self.assertIsNone(initial_checkpoint.layout.display)
+        self.assertIsNone(exact_resume.layout.display)
+        self.assertTrue(
+            any(
+                "additional epochs" in str(getattr(item, "value", ""))
+                for item in training_items
+            )
+        )
+        training_start.value = "fresh"
+        self.assertEqual(initial_checkpoint.layout.display, "none")
+        self.assertEqual(exact_resume.layout.display, "none")
         training_task.value = "token_classification"
         self.assertIsNone(category_count.layout.display)
         self.assertIn("residue_labels", training_csv.placeholder)

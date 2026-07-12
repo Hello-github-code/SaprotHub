@@ -785,6 +785,41 @@ class ColabProSSTUI:
             self._task_intro("classification"), width=self.WIDTH
         )
         model = self._model_dropdown()
+        training_start = widgets.ToggleButtons(
+            options=[
+                ("Fresh official model", "fresh"),
+                ("Continue from checkpoint", "checkpoint"),
+            ],
+            value="fresh",
+            description="Training start:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
+        )
+        initial_checkpoint = _UploadField(
+            self,
+            "Initial checkpoint:",
+            "Path to a compatible ColabProSST .pt checkpoint",
+        )
+        initial_checkpoint.value = self.latest_checkpoint
+        resume_optimizer_state = widgets.Checkbox(
+            value=False,
+            description="Restore optimizer and scheduler (exact resume)",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(display="none"),
+        )
+        checkpoint_help = self._html(
+            "<b>Weight-only fine-tuning:</b> leave exact resume unchecked to "
+            "load model weights and start a new optimizer. The checkpoint must "
+            "use the same task, base model, structure vocabulary, and category "
+            "count.<br><b>Exact resume:</b> also restores optimizer, scheduler, "
+            "epoch, and best validation value; it requires a checkpoint saved "
+            "with training state. The Epoch setting specifies how many "
+            "additional epochs to run.",
+            width="100%",
+            max_width=self.GUIDE_WIDTH,
+            overflow="visible",
+            display="none",
+        )
         csv_input = _UploadField(
             self,
             "Training CSV:",
@@ -829,6 +864,12 @@ class ColabProSSTUI:
         gradient_checkpointing = widgets.Checkbox(
             value=True,
             description="Use gradient checkpointing",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(display="none"),
+        )
+        save_training_state = widgets.Checkbox(
+            value=False,
+            description="Save optimizer state for future exact resume (larger file)",
             style={"description_width": "initial"},
             layout=widgets.Layout(display="none"),
         )
@@ -877,13 +918,29 @@ class ColabProSSTUI:
             mode = None if show else "none"
             freeze_backbone.layout.display = mode
             gradient_checkpointing.layout.display = mode
+            save_training_state.layout.display = mode
             advanced_button.description = (
                 "Hide advanced settings" if show else "Show advanced settings"
             )
 
+        def update_training_start(change):
+            use_checkpoint = change["new"] == "checkpoint"
+            initial_checkpoint.set_visible(use_checkpoint)
+            resume_optimizer_state.layout.display = (
+                None if use_checkpoint else "none"
+            )
+            checkpoint_help.layout.display = None if use_checkpoint else "none"
+            if not use_checkpoint:
+                resume_optimizer_state.value = False
+
         def train():
             if not csv_input.value:
                 raise ValueError("Upload a training CSV or enter its path.")
+            use_checkpoint = training_start.value == "checkpoint"
+            if use_checkpoint and not initial_checkpoint.value:
+                raise ValueError(
+                    "Upload an initial checkpoint or enter its path."
+                )
             clean_task_name = task_name.value.strip()
             if not clean_task_name or Path(clean_task_name).name != clean_task_name:
                 raise ValueError(
@@ -909,6 +966,13 @@ class ColabProSSTUI:
                 structure_vocab_size=model_spec.structure_vocab_size,
                 freeze_backbone=freeze_backbone.value,
                 gradient_checkpointing=gradient_checkpointing.value,
+                initial_checkpoint=(
+                    initial_checkpoint.value if use_checkpoint else ""
+                ),
+                resume_optimizer_state=(
+                    resume_optimizer_state.value if use_checkpoint else False
+                ),
+                save_training_state=save_training_state.value,
                 download=download.value,
             )
             self.latest_checkpoint = result["checkpoint_path"]
@@ -918,6 +982,10 @@ class ColabProSSTUI:
             print("Training finished.")
             print("Model checkpoint:", result["checkpoint_path"])
             print("Test predictions:", result["test_result_csv"])
+            print(
+                "Checkpoint training state:",
+                "included" if result["save_training_state"] else "weights only",
+            )
             finish_hint.value = (
                 "<h3>The training is completed. You can then:</h3>"
                 "<ul>"
@@ -935,6 +1003,8 @@ class ColabProSSTUI:
 
         update_task({"new": task_type.value})
         task_type.observe(update_task, names="value")
+        update_training_start({"new": training_start.value})
+        training_start.observe(update_training_start, names="value")
         template_button.on_click(
             lambda button: self._download_templates(button, model.value)
         )
@@ -952,6 +1022,10 @@ class ColabProSSTUI:
             task_intro,
             self._heading("Model setting:", level=3),
             model,
+            training_start,
+            *initial_checkpoint.items,
+            resume_optimizer_state,
+            checkpoint_help,
             self._heading("Dataset setting:", level=3),
             dataset_help,
             *csv_input.items,
@@ -964,6 +1038,7 @@ class ColabProSSTUI:
             advanced_button,
             freeze_backbone,
             gradient_checkpointing,
+            save_training_state,
             download,
             self._separator(),
             start_button,

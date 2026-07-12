@@ -312,14 +312,14 @@ class _ModelArtifactField:
             repo_id=self.repo_id.value,
             revision=self.revision.value,
         )
+        if self.loaded_callback is not None:
+            self.loaded_callback(result)
         self.downloaded_path = result["artifact_path"]
         self.metadata = result
         print("loaded artifact:", result["artifact_path"])
         print("artifact type:", result["artifact_type"])
         print("task:", result["task_type"])
         print("base model:", result["model_path"])
-        if self.loaded_callback is not None:
-            self.loaded_callback(result)
 
 
 class _StructureInput:

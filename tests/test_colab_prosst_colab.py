@@ -3360,6 +3360,23 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         self.assertEqual(artifact_field.source.layout.display, "none")
         self.assertEqual(artifact_field.repo_id.layout.display, "none")
 
+        rejected_field = module._ModelArtifactField(
+            ui,
+            "Model or adapter:",
+            "Choose a local model",
+        )
+        rejected_field.source.value = rejected_field.HUGGING_FACE
+        rejected_field.repo_id.value = "Example/Community-ProSST"
+
+        def reject_artifact(_metadata):
+            raise ValueError("Artifact is incompatible with this task.")
+
+        rejected_field.on_loaded(reject_artifact)
+        with self.assertRaisesRegex(ValueError, "incompatible"):
+            rejected_field._load_community_model()
+        self.assertEqual(rejected_field.value, "")
+        self.assertIsNone(rejected_field.metadata)
+
         workflow.last_structure = {"sequence": "ACD"}
         structure_input = module._StructureInput(ui)
         self.assertEqual(structure_input.mode.value, structure_input.REUSE)

@@ -1,4 +1,5 @@
 ﻿import json
+import queue
 import shutil
 import zipfile
 from pathlib import Path
@@ -86,19 +87,27 @@ class ColabProSSTWorkflow:
             path.mkdir(parents=True, exist_ok=True)
 
         self.last_structure = None
+        self._pending_downloads = queue.SimpleQueue()
 
     def set_output_dir(self, output_dir: str) -> None:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    @staticmethod
-    def _download(path: Path) -> None:
+    def _download(self, path: Path) -> None:
         try:
-            from google.colab import files
-
-            files.download(str(path))
+            import google.colab  # noqa: F401
         except Exception:
             print("saved:", path)
+            return
+
+        self._pending_downloads.put(str(path))
+        print("queued download:", path)
+
+    def pop_pending_download(self) -> Optional[str]:
+        try:
+            return self._pending_downloads.get_nowait()
+        except queue.Empty:
+            return None
 
     def maybe_upload_path(self, current_path: str, upload_enabled: bool) -> str:
         current_path = str(current_path).strip()

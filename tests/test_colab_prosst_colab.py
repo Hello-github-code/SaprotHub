@@ -1127,6 +1127,33 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
         cls.pd = pandas
         cls.workflow_class = ColabProSSTWorkflow
 
+    def test_colab_downloads_are_queued_for_the_main_event_loop(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+            output_path = root / "result.csv"
+            output_path.write_text("value\n1\n", encoding="utf-8")
+
+            fake_google = types.ModuleType("google")
+            fake_google.__path__ = []
+            fake_colab = types.ModuleType("google.colab")
+            fake_colab.__path__ = []
+            fake_google.colab = fake_colab
+            with patch.dict(
+                sys.modules,
+                {"google": fake_google, "google.colab": fake_colab},
+            ):
+                workflow._download(output_path)
+
+            self.assertEqual(workflow.pop_pending_download(), str(output_path))
+            self.assertIsNone(workflow.pop_pending_download())
+
     def test_training_learning_rate_reaches_model_config(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
@@ -3868,6 +3895,30 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             {"google": fake_google, "google.colab": fake_colab},
         ):
             self.assertIsNone(upload_field._upload_inline())
+
+        pending_downloads = iter(["/tmp/result.zip", None])
+        pop_calls = []
+
+        def pop_pending_download():
+            pop_calls.append(True)
+            return next(pending_downloads)
+
+        workflow.pop_pending_download = pop_pending_download
+        download_calls = []
+        fake_colab.files = types.SimpleNamespace(
+            download=download_calls.append,
+        )
+        with patch.dict(
+            sys.modules,
+            {"google": fake_google, "google.colab": fake_colab},
+        ):
+            ui.active_thread = object()
+            ui._process_pending_download()
+            self.assertEqual(pop_calls, [])
+            ui.active_thread = None
+            ui._process_pending_download()
+            ui._process_pending_download()
+        self.assertEqual(download_calls, ["/tmp/result.zip"])
 
         with tempfile.TemporaryDirectory() as temporary_dir:
             class LegacyWorkflow:

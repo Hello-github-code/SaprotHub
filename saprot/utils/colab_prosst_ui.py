@@ -833,19 +833,20 @@ class ColabProSSTUI:
     def _start_task(self, button, output, action):
         def runner():
             output.clear_output(wait=True)
-            with output:
-                try:
-                    action()
-                except SystemExit:
-                    print("Task interrupted by user.")
-                except Exception as exc:
-                    print(f"{type(exc).__name__}: {exc}")
-                    traceback.print_exc()
-                finally:
-                    button.disabled = False
-                    with self._task_lock:
-                        if self.active_thread is threading.current_thread():
-                            self.active_thread = None
+            try:
+                with output:
+                    try:
+                        action()
+                    except SystemExit:
+                        print("Task interrupted by user.")
+                    except Exception as exc:
+                        print(f"{type(exc).__name__}: {exc}")
+                        traceback.print_exc()
+            finally:
+                button.disabled = False
+                with self._task_lock:
+                    if self.active_thread is threading.current_thread():
+                        self.active_thread = None
 
         with self._task_lock:
             if self.active_thread is not None:
@@ -868,6 +869,28 @@ class ColabProSSTUI:
                     self.active_thread = None
             button.disabled = False
             raise
+
+    def _process_pending_download(self):
+        with self._task_lock:
+            if self.active_thread is not None:
+                return
+
+        pop_download = getattr(self.workflow, "pop_pending_download", None)
+        if pop_download is None:
+            return
+
+        path = pop_download()
+        if path is None:
+            return
+
+        try:
+            from google.colab import files
+
+            files.download(path)
+        except Exception as exc:
+            self.system_status.clear_output(wait=True)
+            with self.system_status:
+                print(f"Download failed for {path}: {type(exc).__name__}: {exc}")
 
     def stop_task(self, silent=False):
         thread = self.active_thread
@@ -2041,6 +2064,7 @@ class ColabProSSTUI:
             with ui_events() as poll_events:
                 while self._polling:
                     poll_events(10)
+                    self._process_pending_download()
                     time.sleep(0.1)
         except KeyboardInterrupt:
             pass

@@ -66,6 +66,10 @@ def my_load_model(config):
       from model.prosst.prosst_regression_model import ProSSTRegressionModel
       return ProSSTRegressionModel(**model_config)
 
+    if model_type == "prosst/prosst_token_classification_model":
+      from model.prosst.prosst_token_classification_model import ProSSTTokenClassificationModel
+      return ProSSTTokenClassificationModel(**model_config)
+
     if model_type == "prosst/prosst_mutation_model":
       from model.prosst.prosst_mutation_model import ProSSTMutationModel
       return ProSSTMutationModel(**model_config)

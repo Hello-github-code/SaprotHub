@@ -22,6 +22,9 @@ try:
     )
     from saprot.model.prosst.prosst_classification_model import ProSSTClassificationModel
     from saprot.model.prosst.prosst_regression_model import ProSSTRegressionModel
+    from saprot.model.prosst.prosst_token_classification_model import (
+        ProSSTTokenClassificationModel,
+    )
     from saprot.model.prosst.specs import resolve_structure_vocab_size
 except ImportError:
     from data.pdb2prosst import (
@@ -32,6 +35,9 @@ except ImportError:
     )
     from model.prosst.prosst_classification_model import ProSSTClassificationModel
     from model.prosst.prosst_regression_model import ProSSTRegressionModel
+    from model.prosst.prosst_token_classification_model import (
+        ProSSTTokenClassificationModel,
+    )
     from model.prosst.specs import resolve_structure_vocab_size
 
 
@@ -152,10 +158,18 @@ def _load_model(
             num_labels=num_labels,
             **common_kwargs,
         )
+    elif task_type == "token_classification":
+        model = ProSSTTokenClassificationModel(
+            num_labels=num_labels,
+            **common_kwargs,
+        )
     elif task_type == "regression":
         model = ProSSTRegressionModel(**common_kwargs)
     else:
-        raise ValueError("task_type must be `classification` or `regression`.")
+        raise ValueError(
+            "task_type must be classification, regression, or "
+            "token_classification."
+        )
 
     model = model.to(device)
     model.eval()
@@ -167,6 +181,7 @@ def validate_checkpoint_compatibility(
     task_type: str,
     model_path: str,
     structure_vocab_size: int,
+    num_labels: Optional[int] = None,
 ) -> None:
     try:
         checkpoint = torch.load(checkpoint_path, map_location="cpu")
@@ -185,6 +200,11 @@ def validate_checkpoint_compatibility(
         "base_model": model_path,
         "structure_vocab_size": int(structure_vocab_size),
     }
+    if (
+        task_type in {"classification", "token_classification"}
+        and num_labels is not None
+    ):
+        expected["num_labels"] = int(num_labels)
     mismatches = [
         f"{key}={metadata[key]!r} (checkpoint), expected {value!r}"
         for key, value in expected.items()
@@ -214,11 +234,18 @@ def predict_csv(
     structure_base_dir: str = None,
     load_pretrained: bool = False,
 ) -> pd.DataFrame:
-    if task_type not in {"classification", "regression"}:
-        raise ValueError("task_type must be `classification` or `regression`.")
+    if task_type not in {
+        "classification",
+        "regression",
+        "token_classification",
+    }:
+        raise ValueError(
+            "task_type must be classification, regression, or "
+            "token_classification."
+        )
     if batch_size < 1:
         raise ValueError("batch_size must be at least 1.")
-    if task_type == "classification" and num_labels < 2:
+    if task_type in {"classification", "token_classification"} and num_labels < 2:
         raise ValueError("Classification num_labels must be at least 2.")
     structure_vocab_size = resolve_structure_vocab_size(
         model_path,
@@ -234,6 +261,7 @@ def predict_csv(
         task_type,
         model_path,
         structure_vocab_size,
+        num_labels,
     )
 
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -275,6 +303,7 @@ def predict_csv(
     )
 
     output_chunks = []
+    token_predictions = []
     for start in range(0, len(sequences), batch_size):
         stop = start + batch_size
         batch_inputs = _prepare_batch(
@@ -285,17 +314,67 @@ def predict_csv(
             structure_vocab_size=structure_vocab_size,
             device=device,
         )
-        logits = model.forward(batch_inputs)
-        output_chunks.append(logits.detach().cpu())
+        logits = model.forward(batch_inputs).detach().cpu()
+        if task_type == "token_classification":
+            for row_idx, sequence in enumerate(sequences[start:stop]):
+                residue_count = min(len(sequence), max_length)
+                encoded_count = int(
+                    batch_inputs["attention_mask"][row_idx].sum().item()
+                )
+                if encoded_count != residue_count + 2:
+                    raise ValueError(
+                        "ProSST tokenizer must produce one token per residue plus "
+                        "CLS/EOS for residue-level prediction: "
+                        f"encoded={encoded_count}, expected={residue_count + 2}."
+                    )
+                residue_logits = logits[row_idx, 1 : 1 + residue_count]
+                if residue_logits.shape[0] != residue_count:
+                    raise ValueError(
+                        "Token-classification output does not align with the "
+                        f"input sequence: logits={residue_logits.shape[0]}, "
+                        f"residues={residue_count}."
+                    )
+                probabilities = torch.softmax(residue_logits, dim=-1)
+                token_predictions.append(
+                    (
+                        probabilities.argmax(dim=-1),
+                        probabilities.max(dim=-1).values,
+                        probabilities,
+                    )
+                )
+        else:
+            output_chunks.append(logits)
 
-    outputs = torch.cat(output_chunks, dim=0)
     result = df.copy()
+    if task_type == "token_classification":
+        result["prediction_length"] = [
+            len(predictions)
+            for predictions, _confidence, _probabilities in token_predictions
+        ]
+        result["predicted_labels"] = [
+            " ".join(str(value.item()) for value in predictions)
+            for predictions, _confidence, _probabilities in token_predictions
+        ]
+        result["confidence"] = [
+            " ".join(f"{value.item():.8g}" for value in confidence)
+            for _predictions, confidence, _probabilities in token_predictions
+        ]
+        for label_idx in range(num_labels):
+            result[f"prob_{label_idx}"] = [
+                " ".join(
+                    f"{value.item():.8g}"
+                    for value in probabilities[:, label_idx]
+                )
+                for _predictions, _confidence, probabilities in token_predictions
+            ]
+    else:
+        outputs = torch.cat(output_chunks, dim=0)
     if task_type == "classification":
         probabilities = torch.softmax(outputs, dim=-1)
         result["pred"] = probabilities.argmax(dim=-1).numpy()
         for idx in range(probabilities.shape[-1]):
             result[f"prob_{idx}"] = probabilities[:, idx].numpy()
-    else:
+    elif task_type == "regression":
         result["pred"] = outputs.reshape(-1).numpy()
 
     result.to_csv(output_csv, index=False)
@@ -309,7 +388,7 @@ def get_args():
     parser.add_argument(
         "--task_type",
         required=True,
-        choices=["classification", "regression"],
+        choices=["classification", "regression", "token_classification"],
     )
     parser.add_argument("--checkpoint_path", required=True)
     parser.add_argument("--model_path", default="AI4Protein/ProSST-2048")

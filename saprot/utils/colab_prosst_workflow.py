@@ -12,6 +12,11 @@ from saprot.data.pdb2prosst import (
     load_or_quantize_structure,
     serialize_structure_tokens,
 )
+from saprot.data.prosst_labels import (
+    RESIDUE_LABEL_IGNORE_INDEX,
+    parse_residue_labels,
+    validate_residue_labels,
+)
 from saprot.scripts.mutation_zeroshot_prosst import score_mutants
 from saprot.scripts.predict_prosst import (
     predict_csv,
@@ -433,16 +438,54 @@ class ColabProSSTWorkflow:
         return input_csv
 
     @staticmethod
-    def _validate_training_labels(input_csv: str, task_type: str, num_labels: int) -> None:
+    def _validate_category_ids(labels, num_labels: int, task_name: str) -> None:
+        if int(num_labels) < 2:
+            raise ValueError(f"{task_name} num_labels must be at least 2.")
+        unique_labels = sorted(set(int(label) for label in labels))
+        if len(unique_labels) != int(num_labels):
+            hint = (
+                " If these labels are continuous scores, choose the regression "
+                "workflow instead."
+                if task_name == "Classification"
+                else ""
+            )
+            raise ValueError(
+                f"{task_name} NUM_LABELS does not match the uploaded dataset: "
+                f"NUM_LABELS={num_labels}, observed_categories={len(unique_labels)}, "
+                f"labels={unique_labels}.{hint}"
+            )
+        expected_labels = list(range(int(num_labels)))
+        if unique_labels != expected_labels:
+            raise ValueError(
+                f"{task_name} labels must be contiguous category IDs starting "
+                f"at 0: expected={expected_labels}, observed={unique_labels}."
+            )
+
+    @classmethod
+    def _validate_training_labels(
+        cls,
+        input_csv: str,
+        task_type: str,
+        num_labels: int,
+    ) -> None:
         df = pd.read_csv(input_csv)
         lower_columns = {column.lower(): column for column in df.columns}
-        label_column = lower_columns.get("label", lower_columns.get("fitness"))
+        if task_type == "token_classification":
+            label_column = lower_columns.get(
+                "residue_labels",
+                lower_columns.get("label"),
+            )
+        else:
+            label_column = lower_columns.get("label", lower_columns.get("fitness"))
         if label_column is None:
-            raise ValueError("Training CSV must contain a label column.")
+            expected = (
+                "residue_labels"
+                if task_type == "token_classification"
+                else "label"
+            )
+            raise ValueError(f"Training CSV must contain a {expected} column.")
 
         if task_type == "classification":
-            if int(num_labels) < 2:
-                raise ValueError("Classification num_labels must be at least 2.")
             labels = pd.to_numeric(df[label_column].dropna(), errors="raise")
             integer_labels = labels.astype(int)
             if not labels.equals(integer_labels.astype(labels.dtype)):
@@ -450,22 +493,40 @@ class ColabProSSTWorkflow:
                     "Classification labels must be integer category IDs in the "
                     "range 0..NUM_LABELS-1."
                 )
-            unique_labels = sorted(integer_labels.unique().tolist())
-            if len(unique_labels) != int(num_labels):
-                raise ValueError(
-                    "Classification NUM_LABELS does not match the uploaded dataset: "
-                    f"NUM_LABELS={num_labels}, observed_categories={len(unique_labels)}, "
-                    f"labels={unique_labels}. If these labels are continuous scores, "
-                    "choose the regression workflow instead."
-                )
-            expected_labels = list(range(int(num_labels)))
-            if unique_labels != expected_labels:
-                raise ValueError(
-                    "Classification labels must be contiguous category IDs starting "
-                    f"at 0: expected={expected_labels}, observed={unique_labels}."
-                )
+            cls._validate_category_ids(
+                integer_labels.tolist(),
+                num_labels,
+                "Classification",
+            )
         elif task_type == "regression":
             pd.to_numeric(df[label_column], errors="raise")
+        elif task_type == "token_classification":
+            sequence_column = lower_columns.get(
+                "sequence",
+                lower_columns.get("protein"),
+            )
+            if sequence_column is None:
+                raise ValueError("Training CSV must contain a sequence column.")
+
+            category_ids = []
+            for row_idx, row in df.iterrows():
+                sequence = str(row[sequence_column]).strip().upper()
+                labels = parse_residue_labels(row[label_column])
+                validate_residue_labels(
+                    sequence,
+                    labels,
+                    context=f"row {row_idx}",
+                )
+                category_ids.extend(
+                    label
+                    for label in labels
+                    if label != RESIDUE_LABEL_IGNORE_INDEX
+                )
+            cls._validate_category_ids(
+                category_ids,
+                num_labels,
+                "Residue-level classification",
+            )
 
     @staticmethod
     def _validate_task_name(task_name: str) -> str:
@@ -552,8 +613,15 @@ class ColabProSSTWorkflow:
         learning_rate: float = 2.0e-5,
         download: bool = True,
     ) -> dict:
-        if task_type not in {"classification", "regression"}:
-            raise ValueError("task_type must be classification or regression.")
+        if task_type not in {
+            "classification",
+            "regression",
+            "token_classification",
+        }:
+            raise ValueError(
+                "task_type must be classification, regression, or "
+                "token_classification."
+            )
         if learning_rate <= 0:
             raise ValueError("learning_rate must be greater than zero.")
         task_name = self._validate_task_name(task_name)
@@ -586,16 +654,18 @@ class ColabProSSTWorkflow:
             structure_base_dir=structure_base_dir,
         )
 
-        model_py = (
-            "prosst/prosst_classification_model"
-            if task_type == "classification"
-            else "prosst/prosst_regression_model"
-        )
-        dataset_py = (
-            "prosst/prosst_classification_dataset"
-            if task_type == "classification"
-            else "prosst/prosst_regression_dataset"
-        )
+        model_py = {
+            "classification": "prosst/prosst_classification_model",
+            "regression": "prosst/prosst_regression_model",
+            "token_classification": "prosst/prosst_token_classification_model",
+        }[task_type]
+        dataset_py = {
+            "classification": "prosst/prosst_classification_dataset",
+            "regression": "prosst/prosst_regression_dataset",
+            "token_classification": (
+                "prosst/prosst_token_classification_dataset"
+            ),
+        }[task_type]
 
         checkpoint_path = self.weight_dir / f"{task_name}.pt"
         test_result_csv = self.output_dir / f"{task_name}_{task_type}_test_predictions.csv"
@@ -613,7 +683,7 @@ class ColabProSSTWorkflow:
             },
             "optimizer_kwargs": {"class": "AdamW", "betas": [0.9, 0.98], "weight_decay": 0.01},
         }
-        if task_type == "classification":
+        if task_type in {"classification", "token_classification"}:
             model_kwargs["num_labels"] = num_labels
 
         config = EasyDict(
@@ -697,8 +767,15 @@ class ColabProSSTWorkflow:
         output_csv: Optional[str] = None,
         download: bool = True,
     ) -> pd.DataFrame:
-        if task_type not in {"classification", "regression"}:
-            raise ValueError("task_type must be classification or regression.")
+        if task_type not in {
+            "classification",
+            "regression",
+            "token_classification",
+        }:
+            raise ValueError(
+                "task_type must be classification, regression, or "
+                "token_classification."
+            )
         structure_vocab_size = resolve_structure_vocab_size(
             model_path,
             structure_vocab_size,
@@ -751,8 +828,15 @@ class ColabProSSTWorkflow:
     ) -> Path:
         if not repo_id.strip():
             raise ValueError("Set repo_id, for example: username/Model-ProSST-Task")
-        if task_type not in {"classification", "regression"}:
-            raise ValueError("task_type must be classification or regression.")
+        if task_type not in {
+            "classification",
+            "regression",
+            "token_classification",
+        }:
+            raise ValueError(
+                "task_type must be classification, regression, or "
+                "token_classification."
+            )
         structure_vocab_size = resolve_structure_vocab_size(
             model_path,
             structure_vocab_size,
@@ -766,6 +850,7 @@ class ColabProSSTWorkflow:
             task_type,
             model_path,
             structure_vocab_size,
+            num_labels,
         )
 
         if run_login:
@@ -788,7 +873,7 @@ class ColabProSSTWorkflow:
             "structure_vocab_size": structure_vocab_size,
             "colab_tool": "ColabProSST",
         }
-        if task_type == "classification":
+        if task_type in {"classification", "token_classification"}:
             metadata["num_labels"] = int(num_labels)
         (package_dir / "metadata.json").write_text(
             json.dumps(metadata, indent=2),

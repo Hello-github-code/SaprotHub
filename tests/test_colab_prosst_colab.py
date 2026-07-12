@@ -662,6 +662,112 @@ class ColabProSSTResidueDataTest(unittest.TestCase):
         )
 
 
+class ColabProSSTResidueModelTest(unittest.TestCase):
+    def test_token_checkpoint_metadata_records_number_of_categories(self):
+        from saprot.model.prosst.prosst_token_classification_model import (
+            ProSSTTokenClassificationModel,
+        )
+
+        model = object.__new__(ProSSTTokenClassificationModel)
+        object.__setattr__(model, "task", "token_classification")
+        object.__setattr__(model, "config_path", "AI4Protein/ProSST-128")
+        object.__setattr__(model, "structure_vocab_size", 128)
+        object.__setattr__(model, "num_labels", 3)
+
+        self.assertEqual(
+            model._checkpoint_metadata()["colabprosst"],
+            {
+                "base_model": "AI4Protein/ProSST-128",
+                "structure_vocab_size": 128,
+                "task": "token_classification",
+                "num_labels": 3,
+            },
+        )
+
+    def test_token_classification_loss_ignores_non_residue_positions(self):
+        import torch
+
+        from saprot.model.prosst.prosst_token_classification_model import (
+            ProSSTTokenClassificationModel,
+        )
+
+        class CaptureMetric:
+            def update(self, logits, targets):
+                self.logits = logits
+                self.targets = targets
+
+        model = object.__new__(ProSSTTokenClassificationModel)
+        torch.nn.Module.__init__(model)
+        model.num_labels = 3
+        metric = CaptureMetric()
+        model.metrics = {"valid": {"valid_acc": metric}}
+
+        logits = torch.tensor(
+            [
+                [
+                    [9.0, 0.0, 0.0],
+                    [3.0, 1.0, 0.0],
+                    [0.0, 1.0, 4.0],
+                    [0.0, 9.0, 0.0],
+                ]
+            ]
+        )
+        labels = {"labels": torch.tensor([[-100, 0, 2, -100]])}
+
+        loss = model.loss_func("valid", logits, labels)
+        expected = torch.nn.functional.cross_entropy(
+            logits[0, 1:3],
+            torch.tensor([0, 2]),
+        )
+
+        self.assertTrue(torch.allclose(loss, expected))
+        self.assertEqual(metric.targets.tolist(), [0, 2])
+        self.assertEqual(metric.logits.shape, (2, 3))
+
+    def test_token_classification_test_csv_uses_one_based_residue_indices(self):
+        import pandas as pd
+        import torch
+
+        from saprot.model.prosst.prosst_token_classification_model import (
+            ProSSTTokenClassificationModel,
+        )
+
+        class DummyMetric:
+            @staticmethod
+            def compute():
+                return torch.tensor(1.0)
+
+            @staticmethod
+            def reset():
+                return None
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            output_path = Path(temporary_dir) / "residue-test.csv"
+            model = object.__new__(ProSSTTokenClassificationModel)
+            torch.nn.Module.__init__(model)
+            model.num_labels = 2
+            model.test_result_path = str(output_path)
+            model.test_outputs = [torch.tensor(0.25)]
+            model.test_token_outputs = [
+                (
+                    torch.tensor([1, 3]),
+                    torch.tensor([[3.0, 1.0], [0.0, 2.0]]),
+                    torch.tensor([0, 1]),
+                )
+            ]
+            model.metrics = {"test": {"test_acc": DummyMetric()}}
+            model.output_test_metrics = lambda _log_dict: None
+            model.log_info = lambda _log_dict: None
+
+            model.on_test_epoch_end()
+
+            result = pd.read_csv(output_path)
+            self.assertEqual(result["sample_index"].tolist(), [0, 0])
+            self.assertEqual(result["residue_index"].tolist(), [1, 3])
+            self.assertEqual(result["pred"].tolist(), [0, 1])
+            self.assertEqual(result["target"].tolist(), [0, 1])
+
+
 class ColabProSSTWorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -787,6 +893,96 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
                 with self.subTest(invalid_name=invalid_name):
                     with self.assertRaises(ValueError):
                         workflow.save_uploaded_content(invalid_name, b"")
+
+    def test_residue_training_selects_token_model_and_dataset(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            csv_path = root / "residue-training.csv"
+            self.pd.DataFrame(
+                [
+                    {
+                        "sequence": "ACD",
+                        "residue_labels": "0 1 0",
+                        "stage": "train",
+                        "structure_tokens": "0 1 2",
+                    },
+                    {
+                        "sequence": "ACE",
+                        "residue_labels": "1 0 1",
+                        "stage": "valid",
+                        "structure_tokens": "0 1 3",
+                    },
+                    {
+                        "sequence": "ACF",
+                        "residue_labels": "0 1 1",
+                        "stage": "test",
+                        "structure_tokens": "0 1 4",
+                    },
+                ]
+            ).to_csv(csv_path, index=False)
+
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+            captured = {}
+
+            class DummyModel:
+                pass
+
+            class DummyDataModule:
+                pass
+
+            class DummyTrainer:
+                def fit(self, model, datamodule):
+                    pass
+
+                def test(self, model, datamodule):
+                    pass
+
+            def load_model(config):
+                captured["model"] = config
+                return DummyModel()
+
+            def load_dataset(config):
+                captured["dataset"] = config
+                return DummyDataModule()
+
+            with patch(
+                "saprot.utils.colab_prosst_workflow.construct_prosst_lmdb"
+            ), patch(
+                "saprot.utils.colab_prosst_workflow.my_load_model",
+                side_effect=load_model,
+            ), patch(
+                "saprot.utils.colab_prosst_workflow.my_load_dataset",
+                side_effect=load_dataset,
+            ), patch(
+                "saprot.utils.colab_prosst_workflow.load_trainer",
+                return_value=DummyTrainer(),
+            ):
+                result = workflow.train_downstream(
+                    task_type="token_classification",
+                    input_csv=str(csv_path),
+                    task_name="residue-training-test",
+                    num_labels=2,
+                    max_epochs=1,
+                    load_pretrained=False,
+                    download=False,
+                )
+
+            self.assertEqual(
+                captured["model"].model_py_path,
+                "prosst/prosst_token_classification_model",
+            )
+            self.assertEqual(captured["model"].kwargs.num_labels, 2)
+            self.assertEqual(
+                captured["dataset"].dataset_py_path,
+                "prosst/prosst_token_classification_dataset",
+            )
+            self.assertEqual(result["task_type"], "token_classification")
 
     def test_csv_templates_follow_the_selected_model_vocabulary(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
@@ -1103,6 +1299,58 @@ class ColabProSSTInferenceTest(unittest.TestCase):
             self.assertIn("prob_1", result.columns)
             self.assertTrue(output_csv.exists())
 
+    def test_residue_prediction_preserves_each_sequences_token_count(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            input_csv = root / "prediction.csv"
+            output_csv = root / "predictions.csv"
+            checkpoint = root / "model.pt"
+            checkpoint.touch()
+            self.pd.DataFrame(
+                [
+                    {"sequence": "ACD", "structure_tokens": "0 1 2"},
+                    {"sequence": "AC", "structure_tokens": "3 4"},
+                ]
+            ).to_csv(input_csv, index=False)
+
+            class FakeTokenPredictionModel:
+                def forward(inner_self, inputs):
+                    input_ids = inputs["input_ids"]
+                    logits = self.torch.zeros(
+                        (input_ids.shape[0], input_ids.shape[1], 2)
+                    )
+                    logits[:, :, 0] = 1.0
+                    logits[:, 2, 1] = 3.0
+                    return logits
+
+            with patch.object(
+                self.prediction.AutoTokenizer,
+                "from_pretrained",
+                return_value=self.FakeTokenizer(),
+            ), patch.object(
+                self.prediction,
+                "_load_model",
+                return_value=FakeTokenPredictionModel(),
+            ):
+                result = self.prediction.predict_csv(
+                    input_csv=str(input_csv),
+                    output_csv=str(output_csv),
+                    task_type="token_classification",
+                    checkpoint_path=str(checkpoint),
+                    num_labels=2,
+                    batch_size=1,
+                    device="cpu",
+                )
+
+            self.assertEqual(result["prediction_length"].tolist(), [3, 2])
+            self.assertEqual(
+                result["predicted_labels"].tolist(),
+                ["0 1 0", "0 1"],
+            )
+            self.assertEqual(len(result.loc[0, "confidence"].split()), 3)
+            self.assertEqual(len(result.loc[1, "prob_0"].split()), 2)
+            self.assertTrue(output_csv.exists())
+
     def test_prediction_rejects_invalid_batch_size_before_loading_model(self):
         with self.assertRaisesRegex(ValueError, "batch_size must be at least 1"):
             self.prediction.predict_csv(
@@ -1147,6 +1395,31 @@ class ColabProSSTInferenceTest(unittest.TestCase):
                     4096,
                 )
 
+    def test_prediction_rejects_checkpoint_with_another_category_count(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            checkpoint_path = Path(temporary_dir) / "model.pt"
+            self.torch.save(
+                {
+                    "model": {},
+                    "colabprosst": {
+                        "task": "token_classification",
+                        "base_model": "AI4Protein/ProSST-128",
+                        "structure_vocab_size": 128,
+                        "num_labels": 3,
+                    },
+                },
+                checkpoint_path,
+            )
+
+            with self.assertRaisesRegex(ValueError, "num_labels=3"):
+                self.prediction.validate_checkpoint_compatibility(
+                    str(checkpoint_path),
+                    "token_classification",
+                    "AI4Protein/ProSST-128",
+                    128,
+                    num_labels=2,
+                )
+
     def test_prediction_model_uses_explicit_optimizer_config(self):
         class FakeModel:
             def to(self, _device):
@@ -1158,6 +1431,7 @@ class ColabProSSTInferenceTest(unittest.TestCase):
         cases = [
             ("classification", "ProSSTClassificationModel"),
             ("regression", "ProSSTRegressionModel"),
+            ("token_classification", "ProSSTTokenClassificationModel"),
         ]
         for task_type, constructor_name in cases:
             with self.subTest(task_type=task_type), patch.object(

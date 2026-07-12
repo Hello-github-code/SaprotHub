@@ -25,7 +25,13 @@ class ProSSTBaseModel(AbstractModel):
         lora_kwargs: dict = None,
         **kwargs,
     ):
-        assert task in ["classification", "regression", "lm", "base"]
+        assert task in [
+            "classification",
+            "regression",
+            "token_classification",
+            "lm",
+            "base",
+        ]
         self.task = task
         self.config_path = config_path
         self.structure_vocab_size = resolve_structure_vocab_size(
@@ -310,7 +316,7 @@ class ProSSTBaseModel(AbstractModel):
         denom = residue_mask.sum(dim=1).clamp(min=1.0)
         return (hidden_states * residue_mask).sum(dim=1) / denom
 
-    def get_pooled_representations(self, inputs):
+    def get_token_representations(self, inputs):
         outputs = self.model(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
@@ -318,7 +324,10 @@ class ProSSTBaseModel(AbstractModel):
             output_hidden_states=True,
             return_dict=True,
         )
-        hidden_states = outputs.hidden_states[-1]
+        return outputs.hidden_states[-1]
+
+    def get_pooled_representations(self, inputs):
+        hidden_states = self.get_token_representations(inputs)
         return self._mean_pool(hidden_states, inputs)
 
     def forward(self, inputs):
@@ -328,13 +337,14 @@ class ProSSTBaseModel(AbstractModel):
         raise NotImplementedError
 
     def _checkpoint_metadata(self) -> dict:
-        return {
-            "colabprosst": {
-                "base_model": self.config_path,
-                "structure_vocab_size": self.structure_vocab_size,
-                "task": self.task,
-            }
+        metadata = {
+            "base_model": self.config_path,
+            "structure_vocab_size": self.structure_vocab_size,
+            "task": self.task,
         }
+        if hasattr(self, "num_labels"):
+            metadata["num_labels"] = int(self.num_labels)
+        return {"colabprosst": metadata}
 
     def save_checkpoint(
         self,

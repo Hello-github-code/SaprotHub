@@ -2028,6 +2028,166 @@ class ColabProSSTInferenceTest(unittest.TestCase):
                 )
 
 
+class ColabProSSTEmbeddingTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import pandas
+        import torch
+
+        from saprot.scripts import extract_prosst_embeddings
+
+        cls.embedding = extract_prosst_embeddings
+        cls.pd = pandas
+        cls.torch = torch
+
+    class FakeTokenizer:
+        vocab = {"A": 3, "C": 4, "D": 5}
+
+        def batch_encode_plus(
+            self,
+            sequences,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=None,
+        ):
+            torch = ColabProSSTEmbeddingTest.torch
+            encoded = [
+                [1, *[self.vocab[residue] for residue in sequence], 2]
+                for sequence in sequences
+            ]
+            target_length = max(len(row) for row in encoded)
+            return {
+                "input_ids": torch.tensor(
+                    [
+                        row + [0] * (target_length - len(row))
+                        for row in encoded
+                    ]
+                ),
+                "attention_mask": torch.tensor(
+                    [
+                        [1] * len(row) + [0] * (target_length - len(row))
+                        for row in encoded
+                    ]
+                ),
+            }
+
+    class FakeModel:
+        def __init__(self):
+            self.last_ss_input_ids = None
+
+        def to(self, _device):
+            return self
+
+        def eval(self):
+            return self
+
+        def __call__(
+            self,
+            input_ids,
+            attention_mask,
+            ss_input_ids,
+            output_hidden_states,
+            return_dict,
+        ):
+            self.last_ss_input_ids = ss_input_ids.detach().cpu()
+            hidden = ColabProSSTEmbeddingTest.torch.stack(
+                [input_ids.float(), ss_input_ids.float()],
+                dim=-1,
+            )
+            return types.SimpleNamespace(
+                hidden_states=(self.torch_zeros(hidden), hidden)
+            )
+
+        @staticmethod
+        def torch_zeros(hidden):
+            return ColabProSSTEmbeddingTest.torch.zeros_like(hidden)
+
+    def test_extracts_aligned_protein_and_residue_embeddings(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            input_csv = root / "embeddings.csv"
+            output_pt = root / "embeddings.pt"
+            self.pd.DataFrame(
+                [
+                    {"sequence": "ACD", "structure_tokens": "0 1 2"},
+                    {"sequence": "AC", "structure_tokens": "3 4"},
+                ]
+            ).to_csv(input_csv, index=False)
+            fake_model = self.FakeModel()
+
+            with patch.object(
+                self.embedding.AutoTokenizer,
+                "from_pretrained",
+                return_value=self.FakeTokenizer(),
+            ), patch.object(
+                self.embedding.AutoModelForMaskedLM,
+                "from_pretrained",
+                return_value=fake_model,
+            ):
+                result = self.embedding.extract_embeddings(
+                    input_csv=str(input_csv),
+                    output_pt=str(output_pt),
+                    model_path="AI4Protein/ProSST-20",
+                    level="both",
+                    batch_size=2,
+                    device="cpu",
+                )
+
+            saved = self.torch.load(output_pt, map_location="cpu")
+            self.assertEqual(saved["format_version"], 1)
+            self.assertEqual(saved["embedding_level"], "both")
+            self.assertEqual(saved["layer_index"], 1)
+            self.assertEqual(saved["hidden_size"], 2)
+            self.assertEqual(saved["dtype"], "float32")
+            self.assertEqual(saved["sequence_lengths"].tolist(), [3, 2])
+            self.assertEqual(
+                [tuple(value.shape) for value in saved["residue_embeddings"]],
+                [(3, 2), (2, 2)],
+            )
+            self.assertTrue(
+                self.torch.allclose(
+                    saved["residue_embeddings"][0],
+                    self.torch.tensor(
+                        [[3.0, 3.0], [4.0, 4.0], [5.0, 5.0]]
+                    ),
+                )
+            )
+            self.assertTrue(
+                self.torch.allclose(
+                    saved["protein_embeddings"],
+                    self.torch.tensor([[4.0, 4.0], [3.5, 6.5]]),
+                )
+            )
+            self.assertEqual(
+                fake_model.last_ss_input_ids.tolist(),
+                [[1, 3, 4, 5, 2], [1, 6, 7, 2, 0]],
+            )
+            index = self.pd.read_csv(result["output_index_csv"])
+            self.assertEqual(index["embedding_index"].tolist(), [0, 1])
+            self.assertEqual(index["sequence_length"].tolist(), [3, 2])
+
+    def test_embedding_extraction_never_silently_truncates(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            input_csv = root / "too-long.csv"
+            self.pd.DataFrame(
+                [{"sequence": "ACD", "structure_tokens": "0 1 2"}]
+            ).to_csv(input_csv, index=False)
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "Embeddings are not silently truncated",
+            ):
+                self.embedding.extract_embeddings(
+                    input_csv=str(input_csv),
+                    output_pt=str(root / "unused.pt"),
+                    model_path="AI4Protein/ProSST-20",
+                    max_length=2,
+                    device="cpu",
+                )
+
+
 @unittest.skipUnless(
     importlib.util.find_spec("ipywidgets") is not None,
     "ipywidgets is installed only in the Colab UI runtime",

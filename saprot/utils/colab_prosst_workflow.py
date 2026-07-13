@@ -976,14 +976,21 @@ class ColabProSSTWorkflow:
                 "A ColabProSST training checkpoint must be a .pt dictionary "
                 "containing model weights under `model`."
             )
-        if require_training_state:
-            missing = sorted(RESUMABLE_CHECKPOINT_KEYS - set(state))
-            if missing:
-                raise ValueError(
-                    "Exact resume requires a checkpoint saved with optimizer "
-                    "state. Missing fields: "
-                    f"{missing}. Use weight-only fine-tuning instead."
-                )
+        missing = sorted(RESUMABLE_CHECKPOINT_KEYS - set(state))
+        print("initial checkpoint:", checkpoint)
+        print(
+            "checkpoint training state:",
+            "complete (exact resume available)"
+            if not missing
+            else "weights only (exact resume unavailable)",
+        )
+        if require_training_state and missing:
+            raise ValueError(
+                "Exact resume requires a checkpoint saved with optimizer "
+                f"state. Checkpoint: {checkpoint}. Missing fields: {missing}. "
+                "Upload the training-state checkpoint produced by the prior "
+                "run, or uncheck exact resume for weight-only fine-tuning."
+            )
         return state
 
     @staticmethod

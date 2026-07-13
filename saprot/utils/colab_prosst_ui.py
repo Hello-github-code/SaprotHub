@@ -1451,6 +1451,14 @@ class ColabProSSTUI:
                 structure_vocab_size=model_spec.structure_vocab_size,
             )
             print("Start training...")
+            if use_checkpoint:
+                print("Selected checkpoint:", initial_checkpoint.value)
+                print(
+                    "Continuation mode:",
+                    "exact resume"
+                    if resume_optimizer_state.value
+                    else "weight-only fine-tuning",
+                )
             result = self.workflow.train_downstream(
                 task_type=task_type.value,
                 input_csv=csv_input.value,

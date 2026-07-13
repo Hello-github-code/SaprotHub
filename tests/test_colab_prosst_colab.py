@@ -3502,13 +3502,14 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         ui._go_back()
         self.assertEqual(ui.current_page, ui._prediction_menu_page)
         self.assertEqual(ui.navigation_history, [ui._home_page])
-        prediction_download_slots = ui.download_slots
+        prediction_download_output = ui.download_output
         ui._go_back()
         self.assertEqual(ui.current_page, ui._home_page)
         self.assertEqual(ui.navigation_history, [])
         self.assertTrue(ui.back_button.disabled)
-        self.assertIsNot(ui.download_slots, prediction_download_slots)
-        self.assertEqual(ui.download_slots, [])
+        self.assertIsNot(ui.download_output, prediction_download_output)
+        self.assertIn(ui.download_output, ui.system_widgets)
+        self.assertNotIn(prediction_download_output, ui.system_widgets)
         global_clear_calls.clear()
 
         pages = [
@@ -3996,17 +3997,11 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             [path for path, _slot in download_calls],
             ["/tmp/test_predictions.csv", "/tmp/checkpoint.pt"],
         )
-        self.assertEqual(len(ui.download_slots), 2)
-        self.assertIsNot(ui.download_slots[0], ui.download_slots[1])
         self.assertEqual(
             [slot for _path, slot in download_calls],
-            ui.download_slots,
+            [ui.download_output, ui.download_output],
         )
-        download_displays = rendered[rendered_before_downloads:]
-        self.assertEqual(
-            download_displays,
-            [(ui.download_slots[0],), (ui.download_slots[1],)],
-        )
+        self.assertEqual(len(rendered), rendered_before_downloads)
 
         download_script = ui._download_javascript(
             "download-test-id",

@@ -3975,13 +3975,12 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         workflow.pop_pending_download = pop_pending_download
         download_calls = []
         rendered_before_downloads = len(rendered)
+        real_download_file_once = ui._download_file_once
 
-        def record_download(path):
-            download_calls.append(path)
+        def record_download(path, slot):
+            download_calls.append((path, slot))
 
-        fake_colab.files = types.SimpleNamespace(
-            download=record_download,
-        )
+        ui._download_file_once = record_download
         with patch.dict(
             sys.modules,
             {"google": fake_google, "google.colab": fake_colab},
@@ -3994,16 +3993,89 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             ui._process_pending_download()
             ui._process_pending_download()
         self.assertEqual(
-            download_calls,
+            [path for path, _slot in download_calls],
             ["/tmp/test_predictions.csv", "/tmp/checkpoint.pt"],
         )
         self.assertEqual(len(ui.download_slots), 2)
         self.assertIsNot(ui.download_slots[0], ui.download_slots[1])
+        self.assertEqual(
+            [slot for _path, slot in download_calls],
+            ui.download_slots,
+        )
         download_displays = rendered[rendered_before_downloads:]
         self.assertEqual(
             download_displays,
             [(ui.download_slots[0],), (ui.download_slots[1],)],
         )
+
+        download_script = ui._download_javascript(
+            "download-test-id",
+            "test_predictions.csv",
+            123,
+        )
+        self.assertIn("sessionStorage.getItem(requestKey)", download_script)
+        self.assertIn("alreadyRequested", download_script)
+        self.assertEqual(download_script.count("link.click()"), 1)
+
+        class FakeCommManager:
+            def __init__(self):
+                self.targets = {}
+
+            def register_target(self, name, callback):
+                self.targets[name] = callback
+
+            def unregister_target(self, name, callback):
+                self.assert_callback(name, callback)
+                del self.targets[name]
+
+            def assert_callback(self, name, callback):
+                self_case.assertIs(self.targets[name], callback)
+
+        class FakeComm:
+            def __init__(self):
+                self.callback = None
+                self.buffers = []
+                self.closed = False
+
+            def on_msg(self, callback):
+                self.callback = callback
+
+            def send(self, _data, _metadata, buffers):
+                self.buffers.extend(buffers)
+
+            def close(self):
+                self.closed = True
+
+        class FakeDownloadSlot:
+            def __init__(self):
+                self.items = []
+
+            def append_display_data(self, item):
+                self.items.append(item)
+
+        self_case = self
+        manager = FakeCommManager()
+        fake_shell = types.SimpleNamespace(
+            kernel=types.SimpleNamespace(comm_manager=manager)
+        )
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            download_path = Path(temporary_dir) / "result.csv"
+            download_path.write_bytes(b"value\n1\n")
+            slot = FakeDownloadSlot()
+            with patch("IPython.get_ipython", return_value=fake_shell):
+                real_download_file_once(download_path, slot)
+
+            self.assertEqual(len(slot.items), 1)
+            self.assertIn("result.csv", slot.items[0].data)
+            self.assertEqual(len(manager.targets), 1)
+            target = next(iter(manager.targets.values()))
+            comm = FakeComm()
+            target(comm, None)
+            comm.callback(None)
+            comm.callback(None)
+            self.assertEqual(b"".join(comm.buffers), b"value\n1\n")
+            self.assertTrue(comm.closed)
+            self.assertEqual(manager.targets, {})
 
         class InterruptingPollContext:
             def __enter__(self):

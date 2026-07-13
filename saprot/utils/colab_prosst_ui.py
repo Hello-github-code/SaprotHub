@@ -2,6 +2,7 @@ import base64
 import collections
 import csv
 import ctypes
+import json
 import pkgutil
 import threading
 import time
@@ -874,6 +875,105 @@ class ColabProSSTUI:
             layout=self.widgets.Layout(width="100%", max_width=self.GUIDE_WIDTH)
         )
 
+    @staticmethod
+    def _download_javascript(comm_id, filename, size):
+        request_key = f"colabprosst-download:{comm_id}"
+        return f"""
+        (async () => {{
+          const requestKey = {json.dumps(request_key)};
+          window.__colabProSSTDownloadRequests =
+              window.__colabProSSTDownloadRequests || new Set();
+          let alreadyRequested =
+              window.__colabProSSTDownloadRequests.has(requestKey);
+          try {{
+            alreadyRequested = alreadyRequested ||
+                sessionStorage.getItem(requestKey) === '1';
+          }} catch (error) {{}}
+          if (alreadyRequested || !google.colab.kernel.accessAllowed) return;
+
+          window.__colabProSSTDownloadRequests.add(requestKey);
+          try {{ sessionStorage.setItem(requestKey, '1'); }} catch (error) {{}}
+
+          const progressBox = document.createElement('div');
+          const label = document.createElement('label');
+          label.textContent = `Downloading ${{{json.dumps(filename)}}}: `;
+          progressBox.appendChild(label);
+          const progress = document.createElement('progress');
+          progress.max = {int(size)};
+          progressBox.appendChild(progress);
+          document.body.appendChild(progressBox);
+
+          try {{
+            const buffers = [];
+            let downloaded = 0;
+            const channel = await google.colab.kernel.comms.open(
+                {json.dumps(comm_id)});
+            channel.send({{}});
+            for await (const message of channel.messages) {{
+              channel.send({{}});
+              if (!message.buffers) continue;
+              for (const buffer of message.buffers) {{
+                buffers.push(buffer);
+                downloaded += buffer.byteLength;
+                progress.value = downloaded;
+              }}
+            }}
+            const blob = new Blob(buffers, {{type: 'application/binary'}});
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = {json.dumps(filename)};
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+          }} catch (error) {{
+            window.__colabProSSTDownloadRequests.delete(requestKey);
+            try {{ sessionStorage.removeItem(requestKey); }} catch (_) {{}}
+            throw error;
+          }} finally {{
+            progressBox.remove();
+          }}
+        }})();
+        """
+
+    def _download_file_once(self, path, download_slot):
+        from IPython import get_ipython
+        from IPython.display import Javascript
+
+        download_path = Path(path)
+        if not download_path.is_file():
+            raise FileNotFoundError(f"Download file does not exist: {download_path}")
+
+        shell = get_ipython()
+        if shell is None or getattr(shell, "kernel", None) is None:
+            raise RuntimeError("A live IPython kernel is required for downloads.")
+        comm_manager = shell.kernel.comm_manager
+        comm_id = f"colabprosst_download_{uuid.uuid4()}"
+
+        def send_file(comm, _open_message):
+            handle = download_path.open("rb")
+
+            def send_chunk(_message):
+                chunk = handle.read(1024 * 1024)
+                if chunk:
+                    comm.send({}, None, [chunk])
+                    return
+                comm.close()
+                handle.close()
+                comm_manager.unregister_target(comm_id, send_file)
+
+            comm.on_msg(send_chunk)
+
+        comm_manager.register_target(comm_id, send_file)
+        script = self._download_javascript(
+            comm_id,
+            download_path.name,
+            download_path.stat().st_size,
+        )
+        try:
+            download_slot.append_display_data(Javascript(script))
+        except Exception:
+            comm_manager.unregister_target(comm_id, send_file)
+            raise
+
     def _reset_download_output(self):
         self.download_slots = []
 
@@ -971,7 +1071,7 @@ class ColabProSSTUI:
             return
 
         try:
-            from google.colab import files
+            import google.colab  # noqa: F401
 
             # files.download emits Javascript display records. Render every
             # file in a separate top-level Output; changing a shared parent
@@ -979,8 +1079,7 @@ class ColabProSSTUI:
             download_slot = self._new_download_slot()
             self.download_slots.append(download_slot)
             self.display(download_slot)
-            with download_slot:
-                files.download(path)
+            self._download_file_once(path, download_slot)
             self.system_status.clear_output(wait=True)
             with self.system_status:
                 print(

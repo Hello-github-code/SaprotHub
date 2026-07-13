@@ -3494,10 +3494,14 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         ui._go_back()
         self.assertEqual(ui.current_page, ui._prediction_menu_page)
         self.assertEqual(ui.navigation_history, [ui._home_page])
+        prediction_download_output = ui.download_output
         ui._go_back()
         self.assertEqual(ui.current_page, ui._home_page)
         self.assertEqual(ui.navigation_history, [])
         self.assertTrue(ui.back_button.disabled)
+        self.assertIsNot(ui.download_output, prediction_download_output)
+        self.assertIn(ui.download_output, ui.system_widgets)
+        self.assertNotIn(prediction_download_output, ui.system_widgets)
         global_clear_calls.clear()
 
         pages = [

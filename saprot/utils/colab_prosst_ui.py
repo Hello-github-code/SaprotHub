@@ -831,9 +831,7 @@ class ColabProSSTUI:
         self.back_button = self._button("Go back", width="120px", style="success")
         self.refresh_button = self._button("Refresh", width="120px", style="success")
         self.stop_button = self._button("Stop", width="120px", style="danger")
-        self.download_output = self.widgets.Output(
-            layout=self.widgets.Layout(width="100%", max_width=self.GUIDE_WIDTH)
-        )
+        self.download_output = self._new_download_output()
         self.system_status = self.widgets.Output(
             layout=self.widgets.Layout(width=self.WIDTH)
         )
@@ -858,6 +856,16 @@ class ColabProSSTUI:
             self.download_output,
             self.system_status,
         ]
+        self._download_output_index = len(self.system_widgets) - 2
+
+    def _new_download_output(self):
+        return self.widgets.Output(
+            layout=self.widgets.Layout(width="100%", max_width=self.GUIDE_WIDTH)
+        )
+
+    def _reset_download_output(self):
+        self.download_output = self._new_download_output()
+        self.system_widgets[self._download_output_index] = self.download_output
 
     def _update_navigation_controls(self):
         self.back_button.disabled = not self.navigation_history
@@ -870,6 +878,9 @@ class ColabProSSTUI:
         if remember and previous_page is not None and previous_page != page:
             self.navigation_history.append(previous_page)
         self.current_page = page
+        # A Colab Output widget retains Javascript display records. Reusing it
+        # on another page would replay completed download scripts.
+        self._reset_download_output()
         self.clear_output(wait=True)
         page()
         self._update_navigation_controls()
@@ -947,7 +958,10 @@ class ColabProSSTUI:
                 files.download(path)
             self.system_status.clear_output(wait=True)
             with self.system_status:
-                print(f'Download started: {Path(path).name}')
+                print(
+                    f'Download request sent: {Path(path).name}. '
+                    'Check your browser downloads.'
+                )
         except Exception as exc:
             self.system_status.clear_output(wait=True)
             with self.system_status:
@@ -2129,6 +2143,7 @@ class ColabProSSTUI:
         """Display the first page and optionally keep Colab widget events alive."""
         self.navigation_history.clear()
         self.current_page = self._home_page
+        self._reset_download_output()
         self._home_page()
         self._update_navigation_controls()
         self.display(*self.system_widgets)

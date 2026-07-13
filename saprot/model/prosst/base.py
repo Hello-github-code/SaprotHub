@@ -155,9 +155,29 @@ class ProSSTBaseModel(AbstractModel):
 
             self.forward = lora_forward(self.forward)
 
+        if self.gradient_checkpointing:
+            self._disable_peft_input_require_grads()
         if hasattr(self.model, "print_trainable_parameters"):
             self.model.print_trainable_parameters()
         self.init_optimizers()
+
+    def _disable_peft_input_require_grads(self):
+        """Remove PEFT's reentrant-checkpoint compatibility hook.
+
+        ColabProSST checkpoints encoder layers with ``use_reentrant=False``, so
+        gradients reach LoRA parameters without forcing frozen embedding
+        outputs to require gradients. Leaving PEFT's hook active turns the
+        output into a leaf tensor and conflicts with ProSST's in-place token
+        dropout mask.
+        """
+        get_base_model = getattr(self.model, "get_base_model", None)
+        base_model = get_base_model() if callable(get_base_model) else self.model
+        hook = getattr(base_model, "_require_grads_hook", None)
+        if hook is None:
+            return
+
+        hook.remove()
+        delattr(base_model, "_require_grads_hook")
 
     def initialize_model(self):
         self.tokenizer = AutoTokenizer.from_pretrained(

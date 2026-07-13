@@ -524,6 +524,51 @@ class ColabProSSTStructureRuntimeTest(unittest.TestCase):
                 },
             )
 
+    def test_lora_removes_the_unneeded_peft_input_gradient_hook(self):
+        import torch
+
+        from saprot.model.prosst.base import ProSSTBaseModel
+
+        class Hook:
+            removed = False
+
+            def remove(self):
+                self.removed = True
+
+        class PeftModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.base = torch.nn.Module()
+                self.base._require_grads_hook = Hook()
+
+            def get_base_model(self):
+                return self.base
+
+        model = object.__new__(ProSSTBaseModel)
+        torch.nn.Module.__init__(model)
+        model.model = PeftModel()
+        hook = model.model.base._require_grads_hook
+
+        model._disable_peft_input_require_grads()
+
+        self.assertTrue(hook.removed)
+        self.assertFalse(hasattr(model.model.base, "_require_grads_hook"))
+
+    def test_non_reentrant_checkpoint_backpropagates_without_input_grad(self):
+        import torch
+
+        frozen_input = torch.randn(2, 3)
+        adapter = torch.nn.Linear(3, 2, bias=False)
+
+        output = torch.utils.checkpoint.checkpoint(
+            adapter,
+            frozen_input,
+            use_reentrant=False,
+        )
+        output.sum().backward()
+
+        self.assertIsNotNone(adapter.weight.grad)
+
     def test_lora_adapter_records_its_model_contract(self):
         import torch
 

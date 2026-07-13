@@ -3238,6 +3238,14 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         ui.display = lambda *items: rendered.append(items)
         ui.clear_output = lambda **kwargs: global_clear_calls.append(kwargs)
 
+        def flatten_widgets(items):
+            for item in items:
+                children = getattr(item, "children", ())
+                if children:
+                    yield from flatten_widgets(children)
+                else:
+                    yield item
+
         input_guide = ui._input_guide()
         self.assertEqual(input_guide.layout.width, "100%")
         self.assertEqual(input_guide.layout.max_width, ui.GUIDE_WIDTH)
@@ -3458,7 +3466,7 @@ class ColabProSSTWidgetTest(unittest.TestCase):
 
         rendered.clear()
         ui._home_page()
-        home_items = rendered[-1]
+        home_items = list(flatten_widgets(rendered[-1]))
         self.assertEqual(
             [item.description for item in home_items[1:4]],
             [
@@ -3523,7 +3531,7 @@ class ColabProSSTWidgetTest(unittest.TestCase):
 
         rendered.clear()
         ui._prediction_menu_page()
-        prediction_menu_items = rendered[-1]
+        prediction_menu_items = list(flatten_widgets(rendered[-1]))
         self.assertTrue(
             any(
                 getattr(item, "description", "")
@@ -3541,13 +3549,6 @@ class ColabProSSTWidgetTest(unittest.TestCase):
 
         rendered.clear()
         ui._embedding_page()
-        def flatten_widgets(items):
-            for item in items:
-                yield item
-                children = getattr(item, "children", ())
-                if children:
-                    yield from flatten_widgets(children)
-
         embedding_items = list(flatten_widgets(rendered[-1]))
         embedding_level = next(
             item
@@ -3925,13 +3926,8 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         fake_colab = types.ModuleType("google.colab")
         fake_colab.__path__ = []
         adaptive_height_calls = []
-
-        def record_height_script(script, ignore_result=False):
-            adaptive_height_calls.append((script, ignore_result))
-
         fake_colab.output = types.SimpleNamespace(
             no_vertical_scroll=lambda: adaptive_height_calls.append(True),
-            eval_js=record_height_script,
         )
         fake_google.colab = fake_colab
         with patch.dict(
@@ -3939,11 +3935,7 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             {"google": fake_google, "google.colab": fake_colab},
         ):
             ui._enable_adaptive_colab_height()
-        self.assertEqual(adaptive_height_calls[0], True)
-        height_script, ignore_result = adaptive_height_calls[1]
-        self.assertIn("ResizeObserver", height_script)
-        self.assertIn("setIframeHeight(0, true", height_script)
-        self.assertTrue(ignore_result)
+        self.assertEqual(adaptive_height_calls, [True])
 
         fake_colab.output = FakeColabOutput()
         with patch.dict(

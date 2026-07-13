@@ -621,6 +621,19 @@ class ColabProSSTUI:
             margin="18px 0 12px 0",
         )
 
+    def _widget_stack(self, *items):
+        return self.widgets.VBox(
+            list(items),
+            layout=self.widgets.Layout(
+                width="100%",
+                max_width=self.GUIDE_WIDTH,
+                overflow="visible",
+            ),
+        )
+
+    def _display_page(self, *items):
+        self.display(self._widget_stack(*items))
+
     def _button(self, description, width=None, style=""):
         return self.widgets.Button(
             description=description,
@@ -876,31 +889,7 @@ class ColabProSSTUI:
             from google.colab import output as colab_output
 
             colab_output.no_vertical_scroll()
-            colab_output.eval_js(
-                """
-                (() => {
-                  const resize = () => {
-                    if (window.__colabProSSTResizeFrame) {
-                      cancelAnimationFrame(window.__colabProSSTResizeFrame);
-                    }
-                    window.__colabProSSTResizeFrame = requestAnimationFrame(() => {
-                      google.colab.output.setIframeHeight(0, true, {
-                        interactive: true,
-                        maxHeight: 99999,
-                      });
-                    });
-                  };
-                  if (window.__colabProSSTResizeObserver) {
-                    window.__colabProSSTResizeObserver.disconnect();
-                  }
-                  window.__colabProSSTResizeObserver = new ResizeObserver(resize);
-                  window.__colabProSSTResizeObserver.observe(document.body);
-                  resize();
-                })();
-                """,
-                ignore_result=True,
-            )
-        except Exception:
+        except (ImportError, AttributeError):
             # Local Jupyter runtimes do not provide Colab's output-frame API.
             pass
 
@@ -918,7 +907,7 @@ class ColabProSSTUI:
         self.clear_output(wait=True)
         page()
         self._update_navigation_controls()
-        self.display(*self.system_widgets)
+        self.display(self._widget_stack(*self.system_widgets))
         self._enable_adaptive_colab_height()
 
     def _go_back(self):
@@ -1075,7 +1064,7 @@ class ColabProSSTUI:
         )
         share_button.on_click(lambda _button: self._navigate(self._share_page))
 
-        self.display(
+        self._display_page(
             title,
             train_button,
             predict_button,
@@ -1434,7 +1423,7 @@ class ColabProSSTUI:
             lambda _button: self._start_task(start_button, output, train)
         )
 
-        self.display(
+        self._display_page(
             self._heading("Please finish the setting of your training task"),
             self._heading("Task setting:", level=3),
             task_name,
@@ -1506,7 +1495,7 @@ class ColabProSSTUI:
             lambda _button: self._navigate(self._structure_page)
         )
         template_button.on_click(self._download_templates)
-        self.display(
+        self._display_page(
             self._heading(
                 "ColabProSST supports multiple prediction tasks, which one "
                 "would you like to choose?"
@@ -1654,7 +1643,7 @@ class ColabProSSTUI:
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, predict)
         )
-        self.display(
+        self._display_page(
             self._heading("Protein and protein-pair property prediction"),
             self._heading("Choose the prediction task:", level=3),
             task_type,
@@ -1825,7 +1814,7 @@ class ColabProSSTUI:
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, extract)
         )
-        self.display(
+        self._display_page(
             self._heading("Extract ProSST embeddings"),
             self._html(
                 "The final ProSST hidden layer is used. Protein-level output "
@@ -1896,7 +1885,7 @@ class ColabProSSTUI:
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, predict)
         )
-        self.display(
+        self._display_page(
             self._heading("Single-site saturation mutagenesis"),
             self._html(
                 "Upload a CSV containing <b>exactly one protein row</b>. "
@@ -1958,7 +1947,7 @@ class ColabProSSTUI:
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, predict)
         )
-        self.display(
+        self._display_page(
             self._heading("Mutational effect prediction"),
             self._heading("Model setting:", level=3),
             model,
@@ -2063,7 +2052,7 @@ class ColabProSSTUI:
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, convert)
         )
-        self.display(
+        self._display_page(
             self._heading("Convert protein structure to ProSST tokens"),
             self._heading("Model setting:", level=3),
             model,
@@ -2158,7 +2147,7 @@ class ColabProSSTUI:
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, upload)
         )
-        self.display(
+        self._display_page(
             self._heading("Share your ColabProSST model"),
             repo_id,
             *checkpoint.items,
@@ -2181,7 +2170,7 @@ class ColabProSSTUI:
         self._reset_download_output()
         self._home_page()
         self._update_navigation_controls()
-        self.display(*self.system_widgets)
+        self.display(self._widget_stack(*self.system_widgets))
         self._enable_adaptive_colab_height()
 
         if not poll:

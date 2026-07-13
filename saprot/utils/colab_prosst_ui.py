@@ -872,6 +872,12 @@ class ColabProSSTUI:
         self._download_output_index = len(self.system_widgets) - 2
 
     def _new_download_output(self):
+        return self.widgets.VBox(
+            [],
+            layout=self.widgets.Layout(width="100%", max_width=self.GUIDE_WIDTH)
+        )
+
+    def _new_download_slot(self):
         return self.widgets.Output(
             layout=self.widgets.Layout(width="100%", max_width=self.GUIDE_WIDTH)
         )
@@ -976,9 +982,15 @@ class ColabProSSTUI:
         try:
             from google.colab import files
 
-            # Colab implements downloads by displaying Javascript. Keep that
-            # transient output away from the cell that owns the full UI.
-            with self.download_output:
+            # files.download emits two Javascript display records. Give every
+            # file its own Output so adding the next file cannot replay an
+            # earlier download script.
+            download_slot = self._new_download_slot()
+            self.download_output.children = (
+                *self.download_output.children,
+                download_slot,
+            )
+            with download_slot:
                 files.download(path)
             self.system_status.clear_output(wait=True)
             with self.system_status:

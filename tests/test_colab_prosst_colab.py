@@ -3964,7 +3964,9 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         ):
             self.assertIsNone(upload_field._upload_inline())
 
-        pending_downloads = iter(["/tmp/result.zip", None])
+        pending_downloads = iter(
+            ["/tmp/test_predictions.csv", "/tmp/checkpoint.pt", None]
+        )
         pop_calls = []
 
         def pop_pending_download():
@@ -3973,21 +3975,8 @@ class ColabProSSTWidgetTest(unittest.TestCase):
 
         workflow.pop_pending_download = pop_pending_download
         download_calls = []
-        download_context = []
-
-        class RecordingDownloadOutput:
-            def __enter__(self):
-                download_context.append("enter")
-                return self
-
-            def __exit__(self, exc_type, exc_value, traceback):
-                download_context.append("exit")
-                return False
-
-        ui.download_output = RecordingDownloadOutput()
 
         def record_download(path):
-            self.assertEqual(download_context, ["enter"])
             download_calls.append(path)
 
         fake_colab.files = types.SimpleNamespace(
@@ -4003,8 +3992,16 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             ui.active_thread = None
             ui._process_pending_download()
             ui._process_pending_download()
-        self.assertEqual(download_calls, ["/tmp/result.zip"])
-        self.assertEqual(download_context, ["enter", "exit"])
+            ui._process_pending_download()
+        self.assertEqual(
+            download_calls,
+            ["/tmp/test_predictions.csv", "/tmp/checkpoint.pt"],
+        )
+        self.assertEqual(len(ui.download_output.children), 2)
+        self.assertIsNot(
+            ui.download_output.children[0],
+            ui.download_output.children[1],
+        )
 
         class InterruptingPollContext:
             def __enter__(self):

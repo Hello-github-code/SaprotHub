@@ -876,7 +876,31 @@ class ColabProSSTUI:
             from google.colab import output as colab_output
 
             colab_output.no_vertical_scroll()
-        except (ImportError, AttributeError):
+            colab_output.eval_js(
+                """
+                (() => {
+                  const resize = () => {
+                    if (window.__colabProSSTResizeFrame) {
+                      cancelAnimationFrame(window.__colabProSSTResizeFrame);
+                    }
+                    window.__colabProSSTResizeFrame = requestAnimationFrame(() => {
+                      google.colab.output.setIframeHeight(0, true, {
+                        interactive: true,
+                        maxHeight: 99999,
+                      });
+                    });
+                  };
+                  if (window.__colabProSSTResizeObserver) {
+                    window.__colabProSSTResizeObserver.disconnect();
+                  }
+                  window.__colabProSSTResizeObserver = new ResizeObserver(resize);
+                  window.__colabProSSTResizeObserver.observe(document.body);
+                  resize();
+                })();
+                """,
+                ignore_result=True,
+            )
+        except Exception:
             # Local Jupyter runtimes do not provide Colab's output-frame API.
             pass
 

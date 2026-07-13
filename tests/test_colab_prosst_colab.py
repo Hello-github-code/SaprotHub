@@ -3925,8 +3925,13 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         fake_colab = types.ModuleType("google.colab")
         fake_colab.__path__ = []
         adaptive_height_calls = []
+
+        def record_height_script(script, ignore_result=False):
+            adaptive_height_calls.append((script, ignore_result))
+
         fake_colab.output = types.SimpleNamespace(
             no_vertical_scroll=lambda: adaptive_height_calls.append(True),
+            eval_js=record_height_script,
         )
         fake_google.colab = fake_colab
         with patch.dict(
@@ -3934,7 +3939,11 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             {"google": fake_google, "google.colab": fake_colab},
         ):
             ui._enable_adaptive_colab_height()
-        self.assertEqual(adaptive_height_calls, [True])
+        self.assertEqual(adaptive_height_calls[0], True)
+        height_script, ignore_result = adaptive_height_calls[1]
+        self.assertIn("ResizeObserver", height_script)
+        self.assertIn("setIframeHeight(0, true", height_script)
+        self.assertTrue(ignore_result)
 
         fake_colab.output = FakeColabOutput()
         with patch.dict(

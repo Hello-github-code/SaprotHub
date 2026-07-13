@@ -3924,6 +3924,18 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         fake_google.__path__ = []
         fake_colab = types.ModuleType("google.colab")
         fake_colab.__path__ = []
+        adaptive_height_calls = []
+        fake_colab.output = types.SimpleNamespace(
+            no_vertical_scroll=lambda: adaptive_height_calls.append(True),
+        )
+        fake_google.colab = fake_colab
+        with patch.dict(
+            sys.modules,
+            {"google": fake_google, "google.colab": fake_colab},
+        ):
+            ui._enable_adaptive_colab_height()
+        self.assertEqual(adaptive_height_calls, [True])
+
         fake_colab.output = FakeColabOutput()
         with patch.dict(
             sys.modules,

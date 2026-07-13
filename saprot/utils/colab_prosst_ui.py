@@ -870,6 +870,16 @@ class ColabProSSTUI:
     def _update_navigation_controls(self):
         self.back_button.disabled = not self.navigation_history
 
+    @staticmethod
+    def _enable_adaptive_colab_height():
+        try:
+            from google.colab import output as colab_output
+
+            colab_output.no_vertical_scroll()
+        except (ImportError, AttributeError):
+            # Local Jupyter runtimes do not provide Colab's output-frame API.
+            pass
+
     def _navigate(self, page, remember=True):
         if page is None:
             return
@@ -885,6 +895,7 @@ class ColabProSSTUI:
         page()
         self._update_navigation_controls()
         self.display(*self.system_widgets)
+        self._enable_adaptive_colab_height()
 
     def _go_back(self):
         if not self.navigation_history:
@@ -2147,6 +2158,7 @@ class ColabProSSTUI:
         self._home_page()
         self._update_navigation_controls()
         self.display(*self.system_widgets)
+        self._enable_adaptive_colab_height()
 
         if not poll:
             return self

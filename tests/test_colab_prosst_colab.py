@@ -3956,8 +3956,25 @@ class ColabProSSTWidgetTest(unittest.TestCase):
 
         workflow.pop_pending_download = pop_pending_download
         download_calls = []
+        download_context = []
+
+        class RecordingDownloadOutput:
+            def __enter__(self):
+                download_context.append("enter")
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                download_context.append("exit")
+                return False
+
+        ui.download_output = RecordingDownloadOutput()
+
+        def record_download(path):
+            self.assertEqual(download_context, ["enter"])
+            download_calls.append(path)
+
         fake_colab.files = types.SimpleNamespace(
-            download=download_calls.append,
+            download=record_download,
         )
         with patch.dict(
             sys.modules,
@@ -3970,6 +3987,7 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             ui._process_pending_download()
             ui._process_pending_download()
         self.assertEqual(download_calls, ["/tmp/result.zip"])
+        self.assertEqual(download_context, ["enter", "exit"])
 
         class InterruptingPollContext:
             def __enter__(self):

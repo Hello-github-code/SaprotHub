@@ -831,6 +831,9 @@ class ColabProSSTUI:
         self.back_button = self._button("Go back", width="120px", style="success")
         self.refresh_button = self._button("Refresh", width="120px", style="success")
         self.stop_button = self._button("Stop", width="120px", style="danger")
+        self.download_output = self.widgets.Output(
+            layout=self.widgets.Layout(width="100%", max_width=self.GUIDE_WIDTH)
+        )
         self.system_status = self.widgets.Output(
             layout=self.widgets.Layout(width=self.WIDTH)
         )
@@ -852,6 +855,7 @@ class ColabProSSTUI:
                 "interface.<br><b>Refresh:</b> stop the running task and reset the "
                 "current interface.<br><b>Stop:</b> stop the running task."
             ),
+            self.download_output,
             self.system_status,
         ]
 
@@ -937,7 +941,10 @@ class ColabProSSTUI:
         try:
             from google.colab import files
 
-            files.download(path)
+            # Colab implements downloads by displaying Javascript. Keep that
+            # transient output away from the cell that owns the full UI.
+            with self.download_output:
+                files.download(path)
             self.system_status.clear_output(wait=True)
             with self.system_status:
                 print(f'Download started: {Path(path).name}')

@@ -1324,7 +1324,17 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
             captured = {}
 
             class DummyModel:
-                pass
+                def save_checkpoint(
+                    self,
+                    save_path,
+                    save_info=None,
+                    save_weights_only=True,
+                ):
+                    captured["final_checkpoint"] = {
+                        "path": save_path,
+                        "save_weights_only": save_weights_only,
+                    }
+                    Path(save_path).write_bytes(b"final resume checkpoint")
 
             class DummyDataModule:
                 pass
@@ -1371,6 +1381,14 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
             self.assertFalse(kwargs.save_weights_only)
             self.assertTrue(result["resume_optimizer_state"])
             self.assertTrue(result["save_training_state"])
+            self.assertEqual(
+                captured["final_checkpoint"],
+                {
+                    "path": result["checkpoint_path"],
+                    "save_weights_only": False,
+                },
+            )
+            self.assertTrue(Path(result["checkpoint_path"]).is_file())
 
     def test_exact_resume_rejects_a_weight_only_checkpoint(self):
         import torch

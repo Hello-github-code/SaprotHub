@@ -1447,12 +1447,31 @@ class ColabProSSTWorkflow:
         try:
             trainer.fit(model=model, datamodule=data_module)
 
+            saved_final_resume_checkpoint = False
+            if (
+                resume_optimizer_state
+                and not use_lora
+                and not checkpoint_path.exists()
+            ):
+                print(
+                    "validation did not improve the previous best value; "
+                    "saving the final exact-resume state to",
+                    checkpoint_path,
+                )
+                model.save_checkpoint(
+                    str(checkpoint_path),
+                    save_weights_only=not save_training_state,
+                )
+                saved_final_resume_checkpoint = True
+
             if checkpoint_path.exists() and use_lora:
                 print("loading best LoRA adapter from", checkpoint_path)
                 model.load_lora_adapter(str(checkpoint_path))
-            elif checkpoint_path.exists():
+            elif checkpoint_path.exists() and not saved_final_resume_checkpoint:
                 print("loading best checkpoint from", checkpoint_path)
                 model.load_checkpoint(str(checkpoint_path))
+            elif saved_final_resume_checkpoint:
+                print("testing the final exact-resume model state")
             else:
                 print("best checkpoint was not found; testing the current model state")
 

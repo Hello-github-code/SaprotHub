@@ -3502,14 +3502,13 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         ui._go_back()
         self.assertEqual(ui.current_page, ui._prediction_menu_page)
         self.assertEqual(ui.navigation_history, [ui._home_page])
-        prediction_download_output = ui.download_output
+        prediction_download_slots = ui.download_slots
         ui._go_back()
         self.assertEqual(ui.current_page, ui._home_page)
         self.assertEqual(ui.navigation_history, [])
         self.assertTrue(ui.back_button.disabled)
-        self.assertIsNot(ui.download_output, prediction_download_output)
-        self.assertIn(ui.download_output, ui.system_widgets)
-        self.assertNotIn(prediction_download_output, ui.system_widgets)
+        self.assertIsNot(ui.download_slots, prediction_download_slots)
+        self.assertEqual(ui.download_slots, [])
         global_clear_calls.clear()
 
         pages = [
@@ -3975,6 +3974,7 @@ class ColabProSSTWidgetTest(unittest.TestCase):
 
         workflow.pop_pending_download = pop_pending_download
         download_calls = []
+        rendered_before_downloads = len(rendered)
 
         def record_download(path):
             download_calls.append(path)
@@ -3997,10 +3997,12 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             download_calls,
             ["/tmp/test_predictions.csv", "/tmp/checkpoint.pt"],
         )
-        self.assertEqual(len(ui.download_output.children), 2)
-        self.assertIsNot(
-            ui.download_output.children[0],
-            ui.download_output.children[1],
+        self.assertEqual(len(ui.download_slots), 2)
+        self.assertIsNot(ui.download_slots[0], ui.download_slots[1])
+        download_displays = rendered[rendered_before_downloads:]
+        self.assertEqual(
+            download_displays,
+            [(ui.download_slots[0],), (ui.download_slots[1],)],
         )
 
         class InterruptingPollContext:

@@ -844,7 +844,7 @@ class ColabProSSTUI:
         self.back_button = self._button("Go back", width="120px", style="success")
         self.refresh_button = self._button("Refresh", width="120px", style="success")
         self.stop_button = self._button("Stop", width="120px", style="danger")
-        self.download_output = self._new_download_output()
+        self.download_slots = []
         self.system_status = self.widgets.Output(
             layout=self.widgets.Layout(width=self.WIDTH)
         )
@@ -866,16 +866,8 @@ class ColabProSSTUI:
                 "interface.<br><b>Refresh:</b> stop the running task and reset the "
                 "current interface.<br><b>Stop:</b> stop the running task."
             ),
-            self.download_output,
             self.system_status,
         ]
-        self._download_output_index = len(self.system_widgets) - 2
-
-    def _new_download_output(self):
-        return self.widgets.VBox(
-            [],
-            layout=self.widgets.Layout(width="100%", max_width=self.GUIDE_WIDTH)
-        )
 
     def _new_download_slot(self):
         return self.widgets.Output(
@@ -883,8 +875,7 @@ class ColabProSSTUI:
         )
 
     def _reset_download_output(self):
-        self.download_output = self._new_download_output()
-        self.system_widgets[self._download_output_index] = self.download_output
+        self.download_slots = []
 
     def _update_navigation_controls(self):
         self.back_button.disabled = not self.navigation_history
@@ -982,14 +973,12 @@ class ColabProSSTUI:
         try:
             from google.colab import files
 
-            # files.download emits two Javascript display records. Give every
-            # file its own Output so adding the next file cannot replay an
-            # earlier download script.
+            # files.download emits Javascript display records. Render every
+            # file in a separate top-level Output; changing a shared parent
+            # can make Colab replay scripts from its existing child widgets.
             download_slot = self._new_download_slot()
-            self.download_output.children = (
-                *self.download_output.children,
-                download_slot,
-            )
+            self.download_slots.append(download_slot)
+            self.display(download_slot)
             with download_slot:
                 files.download(path)
             self.system_status.clear_output(wait=True)

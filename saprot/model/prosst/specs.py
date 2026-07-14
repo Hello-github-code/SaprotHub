@@ -2,6 +2,10 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+PROSST_HUB_NAMESPACE = "ProSSTHub"
+PROSST_HUB_URL = f"https://huggingface.co/{PROSST_HUB_NAMESPACE}"
+
+
 @dataclass(frozen=True)
 class ProSSTModelSpec:
     model_path: str

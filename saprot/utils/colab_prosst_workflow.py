@@ -1,5 +1,6 @@
 ﻿import json
 import queue
+import re
 import shutil
 import zipfile
 from pathlib import Path
@@ -36,6 +37,7 @@ from saprot.scripts.predict_prosst import (
 from saprot.model.prosst.specs import (
     DEFAULT_PROSST_MODEL,
     MODEL_PROSST_2048,
+    PROSST_HUB_NAMESPACE,
     resolve_structure_vocab_size,
 )
 from saprot.utils.construct_prosst_lmdb import construct_prosst_lmdb
@@ -50,6 +52,7 @@ RESUMABLE_CHECKPOINT_KEYS = {
     "lr_scheduler",
     "optimizer",
 }
+HF_REPO_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 
 
 class ColabProSSTWorkflow:
@@ -108,6 +111,66 @@ class ColabProSSTWorkflow:
             return self._pending_downloads.get_nowait()
         except queue.Empty:
             return None
+
+    @staticmethod
+    def normalize_hf_model_repo_id(
+        repo_id: str,
+        default_namespace: str = PROSST_HUB_NAMESPACE,
+    ) -> str:
+        repo_id = str(repo_id).strip()
+        if "/" not in repo_id and repo_id:
+            repo_id = f"{default_namespace}/{repo_id}"
+
+        parts = repo_id.split("/")
+        if len(parts) != 2:
+            raise ValueError(
+                "Hugging Face model ID must be a repository name or look "
+                "like `owner/model`."
+            )
+        for part in parts:
+            if (
+                not HF_REPO_COMPONENT_PATTERN.fullmatch(part)
+                or part.endswith((".", "-"))
+                or ".." in part
+                or "--" in part
+            ):
+                raise ValueError(
+                    "Invalid Hugging Face namespace or repository name: "
+                    f"{part!r}."
+                )
+        return "/".join(parts)
+
+    @staticmethod
+    def list_prossthub_models(token=None) -> list[str]:
+        from huggingface_hub import HfApi
+
+        models = HfApi().list_models(
+            author=PROSST_HUB_NAMESPACE,
+            tags="colabprosst",
+            sort="last_modified",
+            direction=-1,
+            token=token,
+        )
+        repo_ids = []
+        for model in models:
+            repo_id = getattr(model, "id", None) or getattr(
+                model,
+                "modelId",
+                None,
+            )
+            if not repo_id:
+                continue
+            try:
+                repo_id = ColabProSSTWorkflow.normalize_hf_model_repo_id(
+                    repo_id
+                )
+            except ValueError:
+                continue
+            if repo_id.split("/", 1)[0].lower() != PROSST_HUB_NAMESPACE.lower():
+                continue
+            if repo_id not in repo_ids:
+                repo_ids.append(repo_id)
+        return repo_ids
 
     def maybe_upload_path(self, current_path: str, upload_enabled: bool) -> str:
         current_path = str(current_path).strip()
@@ -306,16 +369,7 @@ class ColabProSSTWorkflow:
         token=None,
         force_download: bool = False,
     ) -> dict:
-        repo_id = str(repo_id).strip()
-        parts = repo_id.split("/")
-        if (
-            len(parts) != 2
-            or any(not part or part in {".", ".."} for part in parts)
-            or "\\" in repo_id
-        ):
-            raise ValueError(
-                "Hugging Face repository ID must look like `owner/model`."
-            )
+        repo_id = self.normalize_hf_model_repo_id(repo_id)
         revision = str(revision or "").strip() or None
         community_root = self.saprothub_dir / "community_models"
         community_root.mkdir(parents=True, exist_ok=True)
@@ -1583,9 +1637,9 @@ class ColabProSSTWorkflow:
         title: str = "ColabProSST model",
         description: str = "A ProSST checkpoint trained with ColabProSST.",
         download_package: bool = False,
+        allow_update: bool = False,
     ) -> Path:
-        if not repo_id.strip():
-            raise ValueError("Set repo_id, for example: username/Model-ProSST-Task")
+        repo_id = self.normalize_hf_model_repo_id(repo_id)
         if task_type not in SUPPORTED_TASK_TYPES:
             raise ValueError(f"Unsupported ProSST task_type: {task_type}.")
         structure_vocab_size = resolve_structure_vocab_size(
@@ -1607,9 +1661,14 @@ class ColabProSSTWorkflow:
         )
 
         if run_login:
-            from huggingface_hub import notebook_login
+            from huggingface_hub import get_token, notebook_login
 
-            notebook_login()
+            notebook_login(new_session=False, write_permission=True)
+            if get_token() is None:
+                raise RuntimeError(
+                    "Complete the Hugging Face login widget, then run the "
+                    "upload again. A write token is required."
+                )
 
         package_root = self.saprothub_dir / "model_to_push" / "prosst"
         package_dir = package_root / repo_id.replace("/", "__")
@@ -1635,13 +1694,16 @@ class ColabProSSTWorkflow:
         if task_type in PAIR_TASK_TYPES:
             input_format = f"two sets of {input_format}"
         metadata = {
+            "schema_version": 1,
             "model_family": "ProSST",
             "base_model": model_path,
+            "artifact_type": "lora" if is_lora else "full",
             "checkpoint_format": checkpoint_format,
             "task_type": task_type,
             "input_format": input_format,
             "structure_vocab_size": structure_vocab_size,
             "colab_tool": "ColabProSST",
+            "hub_namespace": repo_id.split("/", 1)[0],
         }
         if task_type in CLASSIFICATION_TASK_TYPES:
             metadata["num_labels"] = int(num_labels)
@@ -1662,8 +1724,10 @@ library_name: pytorch
 base_model: {model_path}
 tags:
 - protein-language-model
-- ProSST
-- ColabProSST
+- prosst
+- colabprosst
+- prossthub
+{"- peft" if is_lora else "- pytorch"}
 ---
 
 # {title}
@@ -1681,20 +1745,42 @@ This repository contains a SaprotHub/ColabProSST {"PEFT adapter" if is_lora else
 - Task type: `{task_type}`
 - Base model: `{model_path}`
 - Structure vocabulary: `{structure_vocab_size}`
+- Artifact type: `{"LoRA / PEFT adapter" if is_lora else "full checkpoint"}`
 
-Use `saprot/scripts/predict_prosst.py` from the ColabProSST branch to run prediction with this checkpoint.
+In ColabProSST, choose **Hugging Face repository** as the model source and
+enter `{repo_id}`. The interface reads `metadata.json`, selects the matching
+official ProSST base model, and validates the task and structure vocabulary.
+
+Use `saprot/scripts/predict_prosst.py` from the ColabProSST `prosst` branch
+to run prediction with this artifact outside the notebook.
 """
         (package_dir / "README.md").write_text(readme, encoding="utf-8")
 
         from huggingface_hub import HfApi
 
         api = HfApi()
-        api.create_repo(repo_id=repo_id, private=private, exist_ok=True)
-        api.upload_folder(
-            repo_id=repo_id,
-            folder_path=str(package_dir),
-            commit_message="Upload ColabProSST checkpoint",
-        )
+        try:
+            api.create_repo(
+                repo_id=repo_id,
+                repo_type="model",
+                private=private,
+                exist_ok=allow_update,
+            )
+            api.upload_folder(
+                repo_id=repo_id,
+                repo_type="model",
+                folder_path=str(package_dir),
+                commit_message="Upload ColabProSST model artifact",
+            )
+        except Exception as exc:
+            if repo_id.split("/", 1)[0].lower() == PROSST_HUB_NAMESPACE.lower():
+                raise RuntimeError(
+                    f"Could not upload to {repo_id}. Confirm that the logged-in "
+                    f"Hugging Face account has write access to "
+                    f"{PROSST_HUB_NAMESPACE}. Also use a new repository name, "
+                    "or enable updating an existing repository."
+                ) from exc
+            raise
         print("uploaded to", f"https://huggingface.co/{repo_id}")
 
         if download_package:

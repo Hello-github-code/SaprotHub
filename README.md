@@ -5,7 +5,7 @@
 <a href="https://cbirt.net/no-coding-required-saprothub-brings-protein-modeling-to-every-biologist/" alt="blog"><img src="https://img.shields.io/badge/Blog-Medium-purple" /></a> 
 <a href="https://x.com/sokrypton/status/1795525127653986415"><img src="https://img.shields.io/badge/Twitter-blue?logo=twitter" style="max-width: 100%;"></a>
 
-> **ColabProSST development preview:** always open the current `prosst` branch from [this Colab notebook](https://colab.research.google.com/github/Hello-github-code/SaprotHub/blob/prosst/colab/ColabProSST.ipynb). Old notebooks saved in Google Drive do not update automatically.
+> **ColabProSST development preview:** always open the current `prosst` branch from [this Colab notebook](https://colab.research.google.com/github/Hello-github-code/SaprotHub/blob/prosst/colab/ColabProSST.ipynb). It can load compatible community artifacts from and share trained models directly to [ProSSTHub](https://huggingface.co/ProSSTHub). Old notebooks saved in Google Drive do not update automatically.
 
 The repository is an official implementation of [Democratizing Protein Language Model Training, Sharing and Collaboration](https://www.biorxiv.org/content/10.1101/2024.05.24.595648v7). Making protein language models fine-tuning and sharing accessible to all - no coding or advanced machine learning expertise required!
 

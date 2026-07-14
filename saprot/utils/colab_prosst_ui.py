@@ -13,6 +13,8 @@ from pathlib import Path
 from saprot.model.prosst.specs import (
     DEFAULT_PROSST_MODEL,
     PROSST_MODEL_SPECS,
+    PROSST_HUB_NAMESPACE,
+    PROSST_HUB_URL,
     get_prosst_model_spec,
 )
 
@@ -232,7 +234,7 @@ class _ModelArtifactField:
         self.source = widgets.ToggleButtons(
             options=[
                 ("Upload / Colab path", self.LOCAL),
-                ("Hugging Face repo", self.HUGGING_FACE),
+                ("ProSSTHub / Hugging Face", self.HUGGING_FACE),
             ],
             value=self.LOCAL,
             description="Model source:",
@@ -242,7 +244,7 @@ class _ModelArtifactField:
         self.local = _UploadField(ui, description, placeholder)
         self.repo_id = widgets.Text(
             value="",
-            placeholder="owner/ColabProSST-model",
+            placeholder="ProSSTHub/model-name or compatible owner/model-name",
             description="Repository ID:",
             style={"description_width": "initial"},
             layout=widgets.Layout(width=ui.WIDTH, height=ui.HEIGHT),
@@ -254,17 +256,29 @@ class _ModelArtifactField:
             style={"description_width": "initial"},
             layout=widgets.Layout(width=ui.WIDTH, height=ui.HEIGHT),
         )
+        self.refresh_button = widgets.Button(
+            description="Refresh ProSSTHub models",
+            layout=widgets.Layout(width=ui.WIDTH, height=ui.HEIGHT),
+        )
+        self.hub_models = widgets.Dropdown(
+            options=[("No model list loaded", "")],
+            value="",
+            description="ProSSTHub models:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width=ui.WIDTH, height=ui.HEIGHT),
+        )
         self.load_button = widgets.Button(
-            description="Load community model",
+            description="Load Hub model",
             button_style="info",
             layout=widgets.Layout(width=ui.WIDTH, height=ui.HEIGHT),
         )
         self.community_link = widgets.HTML(
             value=(
-                "Browse <a href='https://huggingface.co/SaProtHub' "
-                "target='_blank'>SaprotHub</a> or use the "
-                "<a href='https://huggingface.co/spaces/SaProtHub/"
-                "SaprotHub-search' target='_blank'>SaprotHub search engine</a>."
+                f"Browse community models on <a href='{PROSST_HUB_URL}' "
+                f"target='_blank'>{PROSST_HUB_NAMESPACE}</a>. For models in "
+                f"{PROSST_HUB_NAMESPACE}, the short repository name is enough; "
+                "compatible ColabProSST repositories from another namespace "
+                "can be entered as owner/model."
             ),
             layout=widgets.Layout(width="100%", max_width=ui.GUIDE_WIDTH),
         )
@@ -274,6 +288,8 @@ class _ModelArtifactField:
         self.items = [
             self.source,
             *self.local.items,
+            self.refresh_button,
+            self.hub_models,
             self.repo_id,
             self.revision,
             self.load_button,
@@ -283,6 +299,14 @@ class _ModelArtifactField:
         self.source.observe(self._update, names="value")
         self.repo_id.observe(self._invalidate, names="value")
         self.revision.observe(self._invalidate, names="value")
+        self.hub_models.observe(self._select_hub_model, names="value")
+        self.refresh_button.on_click(
+            lambda _button: ui._start_task(
+                self.refresh_button,
+                self.load_output,
+                self._refresh_hub_models,
+            )
+        )
         self.load_button.on_click(
             lambda _button: ui._start_task(
                 self.load_button,
@@ -323,6 +347,8 @@ class _ModelArtifactField:
         show_hf = self.visible and self.source.value == self.HUGGING_FACE
         self.local.set_visible(show_local)
         for item in [
+            self.refresh_button,
+            self.hub_models,
             self.repo_id,
             self.revision,
             self.load_button,
@@ -331,10 +357,31 @@ class _ModelArtifactField:
         ]:
             item.layout.display = None if show_hf else "none"
 
+    def _select_hub_model(self, change):
+        if change["new"]:
+            self.repo_id.value = change["new"]
+
+    def _refresh_hub_models(self):
+        print("Refreshing compatible ProSSTHub models...")
+        repo_ids = self.ui.workflow.list_prossthub_models()
+        self.hub_models.options = [
+            ("Select a ProSSTHub model", ""),
+            *[(repo_id.split("/", 1)[1], repo_id) for repo_id in repo_ids],
+        ]
+        self.hub_models.value = ""
+        if repo_ids:
+            print(f"Found {len(repo_ids)} compatible model(s).")
+        else:
+            print(
+                "No public ColabProSST-compatible models are currently "
+                f"published on {PROSST_HUB_NAMESPACE}. You can still enter a "
+                "compatible owner/model repository ID manually."
+            )
+
     def _load_community_model(self):
         if not self.repo_id.value.strip():
             raise ValueError("Enter a Hugging Face repository ID.")
-        print("Downloading and inspecting community model...")
+        print("Downloading and inspecting the Hub model...")
         result = self.ui.workflow.download_community_checkpoint(
             repo_id=self.repo_id.value,
             revision=self.revision.value,
@@ -344,6 +391,7 @@ class _ModelArtifactField:
         self.downloaded_path = result["artifact_path"]
         self.metadata = result
         print("loaded artifact:", result["artifact_path"])
+        print("repository:", result["repo_id"])
         print("artifact type:", result["artifact_type"])
         print("task:", result["task_type"])
         print("base model:", result["model_path"])
@@ -2177,12 +2225,22 @@ class ColabProSSTUI:
     def _share_page(self):
         self.current_page = self._share_page
         widgets = self.widgets
-        repo_id = widgets.Text(
+        repo_name = widgets.Text(
             value="",
-            placeholder="username/Model-ProSST-Task",
-            description="Repository ID:",
+            placeholder="ProSST-2048-Task-Method",
+            description="ProSSTHub repository name:",
             style={"description_width": "initial"},
             layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
+        )
+        hub_help = self._html(
+            f"The model will be uploaded directly to <a href='{PROSST_HUB_URL}' "
+            f"target='_blank'>{PROSST_HUB_NAMESPACE}</a>. The Hugging Face "
+            "account used below must have write access to the organization. "
+            "Use a new repository name unless you explicitly intend to update "
+            "an existing model.",
+            width="100%",
+            max_width=self.GUIDE_WIDTH,
+            overflow="visible",
         )
         checkpoint = _UploadField(
             self,
@@ -2201,14 +2259,29 @@ class ColabProSSTUI:
         )
         private = widgets.Checkbox(
             value=False,
-            description="Create a private Hugging Face repository",
+            description="Create a private ProSSTHub repository",
             style={"description_width": "initial"},
         )
-        login = widgets.Checkbox(
-            value=True,
-            description="Open Hugging Face login",
+        allow_update = widgets.Checkbox(
+            value=False,
+            description="Update the repository if it already exists",
             style={"description_width": "initial"},
         )
+        login_button = widgets.Button(
+            description="Log in to Hugging Face",
+            button_style="info",
+            layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
+        )
+        login_help = self._html(
+            "Log in with a Hugging Face user access token that can write to "
+            f"{PROSST_HUB_NAMESPACE}. Wait for the login success message before "
+            "clicking Upload model. The token is handled by Hugging Face and "
+            "is not stored in this notebook.",
+            width="100%",
+            max_width=self.GUIDE_WIDTH,
+            overflow="visible",
+        )
+        login_output = self._output()
         title = widgets.Text(
             value="ColabProSST model",
             description="Model title:",
@@ -2229,40 +2302,58 @@ class ColabProSSTUI:
                 None if self._uses_category_count(change["new"]) else "none"
             )
 
+        def open_login(_button):
+            from huggingface_hub import notebook_login
+
+            login_output.clear_output(wait=True)
+            with login_output:
+                notebook_login(new_session=True, write_permission=True)
+
         def upload():
             if not checkpoint.value:
                 raise ValueError(
                     "Upload a model checkpoint/adapter or enter its path."
                 )
-            print("Uploading model to Hugging Face...")
+            clean_repo_name = repo_name.value.strip()
+            if not clean_repo_name:
+                raise ValueError("Enter a ProSSTHub repository name.")
+            repo_id = f"{PROSST_HUB_NAMESPACE}/{clean_repo_name}"
+            print("Uploading model to ProSSTHub...")
+            print("Target repository:", repo_id)
             model_spec = get_prosst_model_spec(model.value)
             package = self.workflow.upload_checkpoint_to_hf(
-                repo_id=repo_id.value,
+                repo_id=repo_id,
                 checkpoint_path=checkpoint.value,
                 task_type=task_type.value,
                 num_labels=num_labels.value,
                 model_path=model.value,
                 structure_vocab_size=model_spec.structure_vocab_size,
                 private=private.value,
-                run_login=login.value,
+                run_login=False,
                 title=title.value,
                 description=description.value,
+                allow_update=allow_update.value,
             )
             print("Local model package:", package)
 
         task_type.observe(update_task, names="value")
+        login_button.on_click(open_login)
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, upload)
         )
         self._display_page(
-            self._heading("Share your ColabProSST model"),
-            repo_id,
+            self._heading("Share your ColabProSST model on ProSSTHub"),
+            hub_help,
+            repo_name,
             *checkpoint.items,
             model,
             task_type,
             num_labels,
             private,
-            login,
+            allow_update,
+            login_help,
+            login_button,
+            login_output,
             title,
             description,
             self._separator(),

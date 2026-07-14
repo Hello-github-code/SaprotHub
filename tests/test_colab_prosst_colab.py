@@ -70,6 +70,7 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("A structure-aware ColabPLM powered by ProSST", introduction)
         self.assertIn("Paper-NeurIPS%202024", introduction)
         self.assertIn("huggingface.co/AI4Protein/ProSST-2048", introduction)
+        self.assertIn("huggingface.co/ProSSTHub", introduction)
         self.assertIn("github.com/ai4protein/ProSST", introduction)
         self.assertIn("theopmc.github.io", introduction)
         self.assertIn("quantized structure tokens", introduction)
@@ -88,9 +89,10 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("checkpoint continuation", introduction)
         self.assertIn("LoRA/PEFT training", introduction)
         self.assertIn(
-            "direct Hugging Face/SaprotHub community checkpoint loading",
+            "direct ProSSTHub and compatible Hugging Face community model loading",
             introduction,
         )
+        self.assertIn("direct model sharing to ProSSTHub", introduction)
         self.assertIn("ColabSaprot", introduction)
         self.assertIn("ColabSeprot", introduction)
         self.assertIn("ColabESMC", introduction)
@@ -1677,9 +1679,74 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
                 cache_dir=str(root / "cache"),
                 saprothub_dir=str(root / "SaprotHub"),
             )
-            for repo_id in ["", "one-part", "../model", "owner\\model"]:
+            for repo_id in ["", "owner/", "../model", "owner\\model"]:
                 with self.subTest(repo_id=repo_id), self.assertRaises(ValueError):
                     workflow.download_community_checkpoint(repo_id)
+
+    def test_short_community_repository_name_defaults_to_prossthub(self):
+        import torch
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            repository = root / "repository"
+            repository.mkdir()
+            torch.save(
+                {
+                    "model": {},
+                    "colabprosst": {
+                        "task": "regression",
+                        "base_model": "AI4Protein/ProSST-2048",
+                        "structure_vocab_size": 2048,
+                    },
+                },
+                repository / "model.pt",
+            )
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+
+            with patch(
+                "huggingface_hub.snapshot_download",
+                return_value=str(repository),
+            ) as download:
+                result = workflow.download_community_checkpoint(
+                    "ProSST-2048-Stability"
+                )
+
+            self.assertEqual(
+                download.call_args.kwargs["repo_id"],
+                "ProSSTHub/ProSST-2048-Stability",
+            )
+            self.assertEqual(
+                result["repo_id"],
+                "ProSSTHub/ProSST-2048-Stability",
+            )
+
+    def test_lists_only_colabprosst_models_from_prossthub(self):
+        with patch("huggingface_hub.HfApi") as api_class:
+            api_class.return_value.list_models.return_value = [
+                types.SimpleNamespace(id="ProSSTHub/Model-A"),
+                types.SimpleNamespace(modelId="ProSSTHub/Model-B"),
+                types.SimpleNamespace(id="AnotherHub/Model-C"),
+                types.SimpleNamespace(id="ProSSTHub/Model-A"),
+            ]
+            repo_ids = self.workflow_class.list_prossthub_models()
+
+        self.assertEqual(
+            repo_ids,
+            ["ProSSTHub/Model-A", "ProSSTHub/Model-B"],
+        )
+        api_class.return_value.list_models.assert_called_once_with(
+            author="ProSSTHub",
+            tags="colabprosst",
+            sort="last_modified",
+            direction=-1,
+            token=None,
+        )
 
     def test_shares_a_lora_adapter_as_a_community_repository(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
@@ -1713,7 +1780,7 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
 
             with patch("huggingface_hub.HfApi") as api_class:
                 package = workflow.upload_checkpoint_to_hf(
-                    repo_id="Example/ProSST-LoRA",
+                    repo_id="ProSSTHub/ProSST-20-LoRA",
                     checkpoint_path=str(adapter),
                     task_type="classification",
                     num_labels=2,
@@ -1728,8 +1795,112 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
                 (package / "metadata.json").read_text(encoding="utf-8")
             )
             self.assertIn("PEFT adapter", metadata["checkpoint_format"])
-            api_class.return_value.create_repo.assert_called_once()
-            api_class.return_value.upload_folder.assert_called_once()
+            self.assertEqual(metadata["schema_version"], 1)
+            self.assertEqual(metadata["artifact_type"], "lora")
+            self.assertEqual(metadata["hub_namespace"], "ProSSTHub")
+            api_class.return_value.create_repo.assert_called_once_with(
+                repo_id="ProSSTHub/ProSST-20-LoRA",
+                repo_type="model",
+                private=False,
+                exist_ok=False,
+            )
+            api_class.return_value.upload_folder.assert_called_once_with(
+                repo_id="ProSSTHub/ProSST-20-LoRA",
+                repo_type="model",
+                folder_path=str(package),
+                commit_message="Upload ColabProSST model artifact",
+            )
+            readme = (package / "README.md").read_text(encoding="utf-8")
+            self.assertIn("prossthub", readme)
+            self.assertIn("ProSSTHub/ProSST-20-LoRA", readme)
+
+    def test_shares_a_full_checkpoint_and_can_update_a_repository(self):
+        import torch
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            checkpoint = root / "checkpoint.pt"
+            torch.save(
+                {
+                    "model": {},
+                    "colabprosst": {
+                        "task": "regression",
+                        "base_model": "AI4Protein/ProSST-2048",
+                        "structure_vocab_size": 2048,
+                    },
+                },
+                checkpoint,
+            )
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+
+            with patch("huggingface_hub.HfApi") as api_class:
+                package = workflow.upload_checkpoint_to_hf(
+                    repo_id="ProSST-2048-Stability-Full",
+                    checkpoint_path=str(checkpoint),
+                    task_type="regression",
+                    model_path="AI4Protein/ProSST-2048",
+                    run_login=False,
+                    allow_update=True,
+                )
+
+            self.assertTrue((package / "model.pt").is_file())
+            metadata = json.loads(
+                (package / "metadata.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(metadata["artifact_type"], "full")
+            api_class.return_value.create_repo.assert_called_once_with(
+                repo_id="ProSSTHub/ProSST-2048-Stability-Full",
+                repo_type="model",
+                private=False,
+                exist_ok=True,
+            )
+
+    def test_upload_waits_for_notebook_login_before_using_the_api(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            adapter = root / "adapter"
+            adapter.mkdir()
+            (adapter / "adapter_config.json").write_text("{}", encoding="utf-8")
+            (adapter / "colabprosst.json").write_text(
+                json.dumps(
+                    {
+                        "task": "regression",
+                        "base_model": "AI4Protein/ProSST-20",
+                        "structure_vocab_size": 20,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+
+            with patch("huggingface_hub.notebook_login") as login, patch(
+                "huggingface_hub.get_token",
+                return_value=None,
+            ), self.assertRaisesRegex(RuntimeError, "Complete the Hugging Face"):
+                workflow.upload_checkpoint_to_hf(
+                    repo_id="ProSSTHub/Login-Test",
+                    checkpoint_path=str(adapter),
+                    task_type="regression",
+                    model_path="AI4Protein/ProSST-20",
+                    run_login=True,
+                )
+
+            login.assert_called_once_with(
+                new_session=False,
+                write_permission=True,
+            )
 
     def test_uploaded_content_is_saved_with_a_safe_filename(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
@@ -3249,6 +3420,8 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             for vocab_size in [20, 128, 512, 1024, 2048, 4096]
         )
         fake_specs.DEFAULT_PROSST_MODEL = fake_specs.PROSST_MODEL_SPECS[4]
+        fake_specs.PROSST_HUB_NAMESPACE = "ProSSTHub"
+        fake_specs.PROSST_HUB_URL = "https://huggingface.co/ProSSTHub"
         fake_specs.get_prosst_model_spec = lambda model_path: next(
             spec
             for spec in fake_specs.PROSST_MODEL_SPECS
@@ -3293,6 +3466,13 @@ class ColabProSSTWidgetTest(unittest.TestCase):
                     "repo_id": repo_id,
                     "revision": revision or "main",
                 }
+
+            @staticmethod
+            def list_prossthub_models():
+                return [
+                    "ProSSTHub/ProSST-20-Classification",
+                    "ProSSTHub/ProSST-2048-Regression",
+                ]
 
         workflow = DummyWorkflow()
         ui = module.ColabProSSTUI(workflow)
@@ -3490,6 +3670,30 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             ui,
             "Model or adapter:",
             "Choose a local model",
+        )
+        self.assertIn(
+            ("ProSSTHub / Hugging Face", artifact_field.HUGGING_FACE),
+            artifact_field.source.options,
+        )
+        self.assertIn(
+            "https://huggingface.co/ProSSTHub",
+            artifact_field.community_link.value,
+        )
+        self.assertNotIn("SaprotHub-search", artifact_field.community_link.value)
+        artifact_field._refresh_hub_models()
+        self.assertIn(
+            (
+                "ProSST-2048-Regression",
+                "ProSSTHub/ProSST-2048-Regression",
+            ),
+            artifact_field.hub_models.options,
+        )
+        artifact_field.hub_models.value = (
+            "ProSSTHub/ProSST-2048-Regression"
+        )
+        self.assertEqual(
+            artifact_field.repo_id.value,
+            "ProSSTHub/ProSST-2048-Regression",
         )
         loaded_metadata = []
         artifact_field.on_loaded(loaded_metadata.append)
@@ -3902,6 +4106,43 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         )
         prediction_task.value = "pair_regression"
         self.assertEqual(prediction_categories.layout.display, "none")
+
+        rendered.clear()
+        ui._share_page()
+        share_items = list(flatten_widgets(rendered[-1]))
+        share_repo_name = next(
+            item
+            for item in share_items
+            if getattr(item, "description", "")
+            == "ProSSTHub repository name:"
+        )
+        share_update = next(
+            item
+            for item in share_items
+            if getattr(item, "description", "")
+            == "Update the repository if it already exists"
+        )
+        share_login = next(
+            item
+            for item in share_items
+            if getattr(item, "description", "") == "Log in to Hugging Face"
+        )
+        self.assertEqual(share_repo_name.value, "")
+        self.assertFalse(share_update.value)
+        self.assertEqual(share_login.button_style, "info")
+        self.assertFalse(
+            any(
+                getattr(item, "description", "") == "Open Hugging Face login"
+                for item in share_items
+            )
+        )
+        self.assertTrue(
+            any(
+                "write access to the organization"
+                in str(getattr(item, "value", ""))
+                for item in share_items
+            )
+        )
 
         class DeferredThread:
             instances = []

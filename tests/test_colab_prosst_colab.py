@@ -252,6 +252,24 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("Convert protein structure to ProSST tokens", prosst)
         self.assertIn("Structure input:", prosst)
 
+    def test_share_page_follows_the_colabsaprot_login_first_flow(self):
+        source = UI_PATH.read_text(encoding="utf-8")
+        share_source = source.split("def _share_page(self):", 1)[1].split(
+            "def launch(self,", 1
+        )[0]
+        ordered_steps = [
+            "1. Log in to Hugging Face",
+            "2. Choose the model to share",
+            "3. Set up the ProSSTHub repository",
+            "4. Describe your model",
+            "5. Upload to ProSSTHub",
+        ]
+
+        positions = [share_source.index(step) for step in ordered_steps]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("if get_token() is None:", share_source)
+        self.assertIn("Log in to Hugging Face in step 1", share_source)
+
     def test_task_pages_require_an_explicit_structure_input_mode(self):
         source = UI_PATH.read_text(encoding="utf-8")
 
@@ -4283,9 +4301,36 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             for item in share_items
             if getattr(item, "description", "") == "Log in to Hugging Face"
         )
+        share_model = next(
+            item
+            for item in share_items
+            if getattr(item, "description", "") == "Model or adapter:"
+        )
+        share_title = next(
+            item
+            for item in share_items
+            if getattr(item, "description", "") == "Model title:"
+        )
+        share_upload = next(
+            item
+            for item in share_items
+            if getattr(item, "description", "") == "Upload model"
+        )
         self.assertEqual(share_repo_name.value, "")
         self.assertFalse(share_update.value)
         self.assertEqual(share_login.button_style, "info")
+        self.assertLess(
+            share_items.index(share_login), share_items.index(share_model)
+        )
+        self.assertLess(
+            share_items.index(share_model), share_items.index(share_repo_name)
+        )
+        self.assertLess(
+            share_items.index(share_repo_name), share_items.index(share_title)
+        )
+        self.assertLess(
+            share_items.index(share_title), share_items.index(share_upload)
+        )
         self.assertFalse(
             any(
                 getattr(item, "description", "") == "Open Hugging Face login"

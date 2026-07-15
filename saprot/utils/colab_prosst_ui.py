@@ -2243,6 +2243,21 @@ class ColabProSSTUI:
     def _share_page(self):
         self.current_page = self._share_page
         widgets = self.widgets
+        login_button = widgets.Button(
+            description="Log in to Hugging Face",
+            button_style="info",
+            layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
+        )
+        login_help = self._html(
+            "Log in first with a Hugging Face user access token that can write "
+            f"to {PROSST_HUB_NAMESPACE}. Wait for the login success message "
+            "before continuing. The token is handled by Hugging Face and is "
+            "not stored in this notebook.",
+            width="100%",
+            max_width=self.GUIDE_WIDTH,
+            overflow="visible",
+        )
+        login_output = self._output()
         repo_name = widgets.Text(
             value="",
             placeholder="ProSST-2048-Task-Method",
@@ -2285,21 +2300,6 @@ class ColabProSSTUI:
             description="Update the repository if it already exists",
             style={"description_width": "initial"},
         )
-        login_button = widgets.Button(
-            description="Log in to Hugging Face",
-            button_style="info",
-            layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
-        )
-        login_help = self._html(
-            "Log in with a Hugging Face user access token that can write to "
-            f"{PROSST_HUB_NAMESPACE}. Wait for the login success message before "
-            "clicking Upload model. The token is handled by Hugging Face and "
-            "is not stored in this notebook.",
-            width="100%",
-            max_width=self.GUIDE_WIDTH,
-            overflow="visible",
-        )
-        login_output = self._output()
         title = widgets.Text(
             value="ColabProSST model",
             description="Model title:",
@@ -2328,6 +2328,12 @@ class ColabProSSTUI:
                 notebook_login(new_session=True, write_permission=True)
 
         def upload():
+            from huggingface_hub import get_token
+
+            if get_token() is None:
+                raise RuntimeError(
+                    "Log in to Hugging Face in step 1 before uploading the model."
+                )
             if not checkpoint.value:
                 raise ValueError(
                     "Upload a model checkpoint/adapter or enter its path."
@@ -2361,20 +2367,28 @@ class ColabProSSTUI:
         )
         self._display_page(
             self._heading("Share your ColabProSST model on ProSSTHub"),
-            hub_help,
-            repo_name,
+            self._heading("1. Log in to Hugging Face", level=3),
+            login_help,
+            login_button,
+            login_output,
+            self._separator(),
+            self._heading("2. Choose the model to share", level=3),
             *checkpoint.items,
             model,
             task_type,
             num_labels,
+            self._separator(),
+            self._heading("3. Set up the ProSSTHub repository", level=3),
+            hub_help,
+            repo_name,
             private,
             allow_update,
-            login_help,
-            login_button,
-            login_output,
+            self._separator(),
+            self._heading("4. Describe your model", level=3),
             title,
             description,
             self._separator(),
+            self._heading("5. Upload to ProSSTHub", level=3),
             start_button,
             output,
         )

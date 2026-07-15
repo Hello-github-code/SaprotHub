@@ -2249,10 +2249,12 @@ class ColabProSSTUI:
             layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
         )
         login_help = self._html(
-            "Log in first with a Hugging Face user access token that can write "
-            f"to {PROSST_HUB_NAMESPACE}. Wait for the login success message "
-            "before continuing. The token is handled by Hugging Face and is "
-            "not stored in this notebook.",
+            "Log in first with a Hugging Face user access token that has write "
+            "permission. The model will first be uploaded to your personal "
+            "Hugging Face account, so ProSSTHub organization access is not "
+            "required. Wait for the login success message before continuing. "
+            "The token is handled by Hugging Face and is not stored in this "
+            "notebook.",
             width="100%",
             max_width=self.GUIDE_WIDTH,
             overflow="visible",
@@ -2261,16 +2263,17 @@ class ColabProSSTUI:
         repo_name = widgets.Text(
             value="",
             placeholder="ProSST-2048-Task-Method",
-            description="ProSSTHub repository name:",
+            description="Repository name:",
             style={"description_width": "initial"},
             layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
         )
         hub_help = self._html(
-            f"The model will be uploaded directly to <a href='{PROSST_HUB_URL}' "
-            f"target='_blank'>{PROSST_HUB_NAMESPACE}</a>. The Hugging Face "
-            "account used below must have write access to the organization. "
-            "Use a new repository name unless you explicitly intend to update "
-            "an existing model.",
+            "The repository will be created under the account used in step 1, "
+            "for example <code>your-name/ProSST-2048-Stability</code>. Use a "
+            "new repository name unless you explicitly intend to update an "
+            f"existing model. After upload, you can contribute it to "
+            f"<a href='{PROSST_HUB_URL}' target='_blank'>"
+            f"{PROSST_HUB_NAMESPACE}</a>.",
             width="100%",
             max_width=self.GUIDE_WIDTH,
             overflow="visible",
@@ -2290,14 +2293,9 @@ class ColabProSSTUI:
             if self._uses_category_count(self.latest_task_type)
             else "none"
         )
-        private = widgets.Checkbox(
-            value=False,
-            description="Create a private ProSSTHub repository",
-            style={"description_width": "initial"},
-        )
         allow_update = widgets.Checkbox(
             value=False,
-            description="Update the repository if it already exists",
+            description="Update my repository if it already exists",
             style={"description_width": "initial"},
         )
         title = widgets.Text(
@@ -2314,6 +2312,13 @@ class ColabProSSTUI:
         )
         start_button = self._button("Upload model", style="info")
         output = self._output()
+        contribution_hint = self._html(
+            "",
+            width="100%",
+            max_width=self.GUIDE_WIDTH,
+            overflow="visible",
+            display="none",
+        )
 
         def update_task(change):
             num_labels.layout.display = (
@@ -2328,21 +2333,15 @@ class ColabProSSTUI:
                 notebook_login(new_session=True, write_permission=True)
 
         def upload():
-            from huggingface_hub import get_token
-
-            if get_token() is None:
-                raise RuntimeError(
-                    "Log in to Hugging Face in step 1 before uploading the model."
-                )
             if not checkpoint.value:
                 raise ValueError(
                     "Upload a model checkpoint/adapter or enter its path."
                 )
             clean_repo_name = repo_name.value.strip()
             if not clean_repo_name:
-                raise ValueError("Enter a ProSSTHub repository name.")
-            repo_id = f"{PROSST_HUB_NAMESPACE}/{clean_repo_name}"
-            print("Uploading model to ProSSTHub...")
+                raise ValueError("Enter a Hugging Face repository name.")
+            repo_id = self.workflow.personal_hf_model_repo_id(clean_repo_name)
+            print("Uploading model to your Hugging Face account...")
             print("Target repository:", repo_id)
             model_spec = get_prosst_model_spec(model.value)
             package = self.workflow.upload_checkpoint_to_hf(
@@ -2352,13 +2351,23 @@ class ColabProSSTUI:
                 num_labels=num_labels.value,
                 model_path=model.value,
                 structure_vocab_size=model_spec.structure_vocab_size,
-                private=private.value,
+                private=False,
                 run_login=False,
                 title=title.value,
                 description=description.value,
                 allow_update=allow_update.value,
             )
             print("Local model package:", package)
+            model_url = f"https://huggingface.co/{repo_id}"
+            contribution_hint.value = (
+                f"<b>Upload complete:</b> <a href='{model_url}' "
+                f"target='_blank'>{repo_id}</a><br>"
+                "The model is now in your personal Hugging Face account. To "
+                f"contribute it to <a href='{PROSST_HUB_URL}' target='_blank'>"
+                f"{PROSST_HUB_NAMESPACE}</a>, send this repository link to the "
+                "ProSSTHub maintainers for review and transfer."
+            )
+            contribution_hint.layout.display = None
 
         task_type.observe(update_task, names="value")
         login_button.on_click(open_login)
@@ -2366,7 +2375,9 @@ class ColabProSSTUI:
             lambda _button: self._start_task(start_button, output, upload)
         )
         self._display_page(
-            self._heading("Share your ColabProSST model on ProSSTHub"),
+            self._heading(
+                "Share your ColabProSST model with the ProSSTHub community"
+            ),
             self._heading("1. Log in to Hugging Face", level=3),
             login_help,
             login_button,
@@ -2378,19 +2389,19 @@ class ColabProSSTUI:
             task_type,
             num_labels,
             self._separator(),
-            self._heading("3. Set up the ProSSTHub repository", level=3),
+            self._heading("3. Name your Hugging Face repository", level=3),
             hub_help,
             repo_name,
-            private,
             allow_update,
             self._separator(),
             self._heading("4. Describe your model", level=3),
             title,
             description,
             self._separator(),
-            self._heading("5. Upload to ProSSTHub", level=3),
+            self._heading("5. Upload to Hugging Face", level=3),
             start_button,
             output,
+            contribution_hint,
         )
 
     def launch(self, poll=True):

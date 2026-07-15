@@ -152,6 +152,36 @@ class ColabProSSTWorkflow:
                 )
         return "/".join(parts)
 
+    @classmethod
+    def personal_hf_model_repo_id(cls, repo_name: str) -> str:
+        repo_name = str(repo_name).strip()
+        if not repo_name or "/" in repo_name or "\\" in repo_name:
+            raise ValueError(
+                "Enter a Hugging Face repository name without an owner prefix."
+            )
+
+        from huggingface_hub import HfApi, get_token
+
+        token = get_token()
+        if token is None:
+            raise RuntimeError(
+                "Log in to Hugging Face before uploading the model."
+            )
+        try:
+            account = HfApi().whoami(token=token)
+        except Exception as exc:
+            raise RuntimeError(
+                "The Hugging Face login could not be verified. Log in again, "
+                "then retry the upload."
+            ) from exc
+        username = str(account.get("name", "")).strip()
+        if not username:
+            raise RuntimeError(
+                "Hugging Face did not return the logged-in user name. Log in "
+                "again before uploading."
+            )
+        return cls.normalize_hf_model_repo_id(f"{username}/{repo_name}")
+
     @staticmethod
     def list_prossthub_models(token=None) -> list[str]:
         from huggingface_hub import HfApi

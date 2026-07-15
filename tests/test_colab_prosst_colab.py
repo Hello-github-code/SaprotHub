@@ -260,15 +260,23 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         ordered_steps = [
             "1. Log in to Hugging Face",
             "2. Choose the model to share",
-            "3. Set up the ProSSTHub repository",
+            "3. Name your Hugging Face repository",
             "4. Describe your model",
-            "5. Upload to ProSSTHub",
+            "5. Upload to Hugging Face",
         ]
 
         positions = [share_source.index(step) for step in ordered_steps]
         self.assertEqual(positions, sorted(positions))
-        self.assertIn("if get_token() is None:", share_source)
-        self.assertIn("Log in to Hugging Face in step 1", share_source)
+        self.assertIn("self.workflow.personal_hf_model_repo_id", share_source)
+        self.assertIn("ProSSTHub organization access is not", share_source)
+        self.assertNotIn(
+            'description="Create a private ProSSTHub repository"', share_source
+        )
+        workflow_source = (
+            REPO_ROOT / "saprot" / "utils" / "colab_prosst_workflow.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("def personal_hf_model_repo_id", workflow_source)
+        self.assertIn('f"{username}/{repo_name}"', workflow_source)
 
     def test_task_pages_require_an_explicit_structure_input_mode(self):
         source = UI_PATH.read_text(encoding="utf-8")
@@ -1312,6 +1320,28 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
 
         cls.pd = pandas
         cls.workflow_class = ColabProSSTWorkflow
+
+    def test_personal_hf_repository_uses_the_logged_in_account(self):
+        with patch("huggingface_hub.get_token", return_value="hf_test"), patch(
+            "huggingface_hub.HfApi"
+        ) as api_class:
+            api_class.return_value.whoami.return_value = {"name": "researcher"}
+            repo_id = self.workflow_class.personal_hf_model_repo_id(
+                "ProSST-2048-Stability"
+            )
+
+        self.assertEqual(repo_id, "researcher/ProSST-2048-Stability")
+        api_class.return_value.whoami.assert_called_once_with(token="hf_test")
+
+        with patch("huggingface_hub.get_token", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "Log in to Hugging Face"):
+                self.workflow_class.personal_hf_model_repo_id("MyModel")
+
+        for repo_name in ["", "another-user/model", "owner\\model"]:
+            with self.subTest(repo_name=repo_name), self.assertRaises(
+                ValueError
+            ):
+                self.workflow_class.personal_hf_model_repo_id(repo_name)
 
     def test_colab_downloads_are_queued_for_the_main_event_loop(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
@@ -4287,14 +4317,13 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         share_repo_name = next(
             item
             for item in share_items
-            if getattr(item, "description", "")
-            == "ProSSTHub repository name:"
+            if getattr(item, "description", "") == "Repository name:"
         )
         share_update = next(
             item
             for item in share_items
             if getattr(item, "description", "")
-            == "Update the repository if it already exists"
+            == "Update my repository if it already exists"
         )
         share_login = next(
             item
@@ -4339,7 +4368,7 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         )
         self.assertTrue(
             any(
-                "write access to the organization"
+                "ProSSTHub organization access is not"
                 in str(getattr(item, "value", ""))
                 for item in share_items
             )

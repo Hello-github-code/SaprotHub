@@ -39,7 +39,7 @@ def _validate_colab_environment():
     if actual_generation != COLAB_ENVIRONMENT_GENERATION:
         raise RuntimeError(
             "This Colab tab is running an outdated ColabProSST bootstrap. "
-            "Open a new notebook tab from the prosst branch GitHub Colab URL, "
+            "Open a new notebook tab from the current GitHub Colab URL, "
             "run its code cell, wait for the one-time Python kernel restart, "
             "and then run that cell once more."
         )

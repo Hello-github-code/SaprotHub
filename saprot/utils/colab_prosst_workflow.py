@@ -41,7 +41,11 @@ from saprot.model.prosst.specs import (
     resolve_structure_vocab_size,
 )
 from saprot.utils.construct_prosst_lmdb import construct_prosst_lmdb
-from saprot.utils.module_loader import load_trainer, my_load_dataset, my_load_model
+from saprot.utils.prosst_module_loader import (
+    load_trainer,
+    my_load_dataset,
+    my_load_model,
+)
 
 
 RESUMABLE_CHECKPOINT_KEYS = {

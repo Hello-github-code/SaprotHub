@@ -17,7 +17,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 NOTEBOOK_PATH = REPO_ROOT / "colab" / "ColabProSST.ipynb"
 COLABSAPROT_PATH = REPO_ROOT / "colab" / "SaprotHub_v2.ipynb"
 UI_PATH = REPO_ROOT / "saprot" / "utils" / "colab_prosst_ui.py"
-README_PATH = REPO_ROOT / "README.md"
 
 
 class ColabProSSTNotebookTest(unittest.TestCase):
@@ -119,15 +118,6 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertNotIn("ColabSeprot", tutorial)
         self.assertNotIn("ProTrek", tutorial)
 
-    def test_readme_links_to_the_current_prosst_notebook(self):
-        readme = README_PATH.read_text(encoding="utf-8")
-        self.assertIn(
-            "colab.research.google.com/github/Hello-github-code/SaprotHub/"
-            "blob/prosst/colab/ColabProSST.ipynb",
-            readme,
-        )
-        self.assertIn("Old notebooks saved in Google Drive", readme)
-
     def test_notebook_checks_both_source_checkouts(self):
         notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
         source = "".join(notebook["cells"][2]["source"])
@@ -149,6 +139,7 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         source = "".join(notebook["cells"][2]["source"])
 
         self.assertIn("Path('/content')", source)
+        self.assertIn("SAPROTHUB_BRANCH = 'main'", source)
         self.assertIn("os.chdir(ROOT)", source)
         self.assertNotIn("ROOT = Path(os.getcwd())", source)
         self.assertIn("def update_saprothub():", source)

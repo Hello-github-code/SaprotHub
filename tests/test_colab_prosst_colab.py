@@ -314,6 +314,92 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertIn("self.workflow.queue_download(download_path)", result_source)
         self.assertIn('style="success"', result_source)
 
+    def test_task_pages_offer_downloads_only_after_completion(self):
+        source = UI_PATH.read_text(encoding="utf-8")
+        page_boundaries = [
+            ("_training_page", "_prediction_menu_page"),
+            ("_property_prediction_page", "_embedding_page"),
+            ("_embedding_page", "_saturation_page"),
+            ("_saturation_page", "_mutation_page"),
+            ("_mutation_page", "_structure_page"),
+            ("_structure_page", "_share_page"),
+        ]
+
+        for page_name, next_page_name in page_boundaries:
+            with self.subTest(page=page_name):
+                page_source = source.split(f"def {page_name}(self):", 1)[1].split(
+                    f"def {next_page_name}(self):", 1
+                )[0]
+                self.assertNotIn("download.value", page_source)
+                self.assertNotIn('description="Download ', page_source)
+                self.assertIn("download=False", page_source)
+                self.assertIn("self._display_result_downloads(", page_source)
+
+        training_source = source.split("def _training_page(self):", 1)[1].split(
+            "def _prediction_menu_page(self):", 1
+        )[0]
+        self.assertIn('("test predictions CSV", result["test_result_csv"])', training_source)
+        self.assertIn("result[\"checkpoint_download_path\"]", training_source)
+
+        embedding_source = source.split("def _embedding_page(self):", 1)[1].split(
+            "def _saturation_page(self):", 1
+        )[0]
+        self.assertIn('("embedding ZIP", result["archive_path"])', embedding_source)
+        self.assertIn('("embeddings PT", result["output_pt"])', embedding_source)
+        self.assertIn(
+            '("embedding index CSV", result["output_index_csv"])',
+            embedding_source,
+        )
+
+    def test_each_result_button_queues_only_its_own_file(self):
+        from saprot.utils.colab_prosst_ui import ColabProSSTUI
+
+        class FakeButton:
+            def __init__(self, description):
+                self.description = description
+                self.tooltip = ""
+                self.callbacks = []
+
+            def on_click(self, callback):
+                self.callbacks.append(callback)
+
+        queued = []
+        fake_ui = types.SimpleNamespace(
+            workflow=types.SimpleNamespace(queue_download=queued.append),
+            _button=lambda description, **_kwargs: FakeButton(description),
+            _heading=lambda text, level=2: (text, level),
+            _widget_stack=lambda *items: items,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            checkpoint = root / "model.pt"
+            predictions = root / "predictions.csv"
+            checkpoint.write_bytes(b"weights")
+            predictions.write_text("prediction\n1\n", encoding="utf-8")
+
+            group = ColabProSSTUI._result_downloads(
+                fake_ui,
+                [
+                    ("model checkpoint", checkpoint),
+                    ("test predictions CSV", predictions),
+                ],
+            )
+
+            checkpoint_button, predictions_button = group[1:]
+            self.assertEqual(
+                checkpoint_button.description,
+                "Download model checkpoint",
+            )
+            self.assertEqual(
+                predictions_button.description,
+                "Download test predictions CSV",
+            )
+            checkpoint_button.callbacks[0](checkpoint_button)
+            self.assertEqual(queued, [str(checkpoint)])
+            predictions_button.callbacks[0](predictions_button)
+            self.assertEqual(queued, [str(checkpoint), str(predictions)])
+
     def test_navigation_uses_page_history_instead_of_a_hardcoded_home(self):
         source = UI_PATH.read_text(encoding="utf-8")
         navigation_source = source.split(
@@ -1237,6 +1323,73 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
             self.assertIsNone(workflow.pop_pending_download())
             with self.assertRaises(FileNotFoundError):
                 workflow.queue_download(str(root / "missing.csv"))
+
+    def test_dataframe_results_record_their_download_path(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            workflow = self.workflow_class(
+                output_dir=str(root / "output"),
+                upload_dir=str(root / "uploads"),
+                asset_dir=str(root / "assets"),
+                cache_dir=str(root / "cache"),
+                saprothub_dir=str(root / "SaprotHub"),
+            )
+            input_csv = root / "input.csv"
+            self.pd.DataFrame(
+                {"sequence": ["ACD"], "structure_tokens": ["1 2 3"]}
+            ).to_csv(input_csv, index=False)
+
+            with patch(
+                "saprot.utils.colab_prosst_workflow.load_or_quantize_structure",
+                return_value={
+                    "sequence": "ACD",
+                    "structure_tokens": [1, 2, 3],
+                    "structure_vocab_size": 20,
+                },
+            ):
+                converted = workflow.convert_structure(
+                    "protein.pdb",
+                    structure_vocab_size=20,
+                    download=False,
+                )
+
+            mutation_result = self.pd.DataFrame({"score": [0.5]})
+
+            def score_mutations(**kwargs):
+                mutation_result.to_csv(kwargs["output_csv"], index=False)
+                return mutation_result
+
+            with patch(
+                "saprot.utils.colab_prosst_workflow.score_mutants",
+                side_effect=score_mutations,
+            ):
+                mutations = workflow.run_zero_shot(
+                    str(input_csv),
+                    model_path="AI4Protein/ProSST-20",
+                    download=False,
+                )
+
+            prediction_result = self.pd.DataFrame({"prediction": [1]})
+
+            def predict(**kwargs):
+                prediction_result.to_csv(kwargs["output_csv"], index=False)
+                return prediction_result
+
+            with patch(
+                "saprot.utils.colab_prosst_workflow.predict_csv",
+                side_effect=predict,
+            ):
+                predictions = workflow.predict_downstream(
+                    task_type="classification",
+                    input_csv=str(input_csv),
+                    checkpoint_path="model.pt",
+                    model_path="AI4Protein/ProSST-20",
+                    download=False,
+                )
+
+            for result in [converted, mutations, predictions]:
+                with self.subTest(output=result.attrs["output_csv"]):
+                    self.assertTrue(Path(result.attrs["output_csv"]).is_file())
 
     def test_training_learning_rate_reaches_model_config(self):
         with tempfile.TemporaryDirectory() as temporary_dir:

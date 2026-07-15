@@ -704,11 +704,11 @@ class ColabProSSTUI:
                 style="success",
             )
             button.tooltip = str(path)
-            button.on_click(
-                lambda _button, download_path=str(path): (
-                    self.workflow.queue_download(download_path)
-                )
-            )
+
+            def queue_result(_button, download_path=str(path)):
+                self.workflow.queue_download(download_path)
+
+            button.on_click(queue_result)
             buttons.append(button)
 
         if not buttons:
@@ -1409,11 +1409,6 @@ class ColabProSSTUI:
             style={"description_width": "initial"},
             layout=widgets.Layout(display="none"),
         )
-        download = widgets.Checkbox(
-            value=True,
-            description="Download checkpoint and test predictions",
-            style={"description_width": "initial"},
-        )
         start_button = self._button("Start training", style="info")
         output = self._output()
         finish_hint = self._html(
@@ -1481,11 +1476,6 @@ class ColabProSSTUI:
             for item in [lora_rank, lora_alpha, lora_dropout]:
                 item.layout.display = None if show_new_lora_config else "none"
             lora_help.layout.display = None if use_lora else "none"
-            download.description = (
-                "Download adapter ZIP and test predictions"
-                if use_lora
-                else "Download checkpoint and test predictions"
-            )
             if use_lora:
                 freeze_backbone.value = False
                 save_training_state.value = False
@@ -1562,7 +1552,7 @@ class ColabProSSTUI:
                 lora_rank=lora_rank.value,
                 lora_alpha=lora_alpha.value,
                 lora_dropout=lora_dropout.value,
-                download=download.value,
+                download=False,
             )
             self.latest_checkpoint = result["checkpoint_path"]
             self.latest_model_path = result["model_path"]
@@ -1579,6 +1569,15 @@ class ColabProSSTUI:
                     if result["save_training_state"]
                     else "weights only",
                 )
+            artifact_label = (
+                "LoRA adapter ZIP"
+                if result["training_method"] == "lora"
+                else "model checkpoint"
+            )
+            self._display_result_downloads(
+                (artifact_label, result["checkpoint_download_path"]),
+                ("test predictions CSV", result["test_result_csv"]),
+            )
             finish_hint.value = (
                 "<h3>The training is completed. You can then:</h3>"
                 "<ul>"
@@ -1639,7 +1638,6 @@ class ColabProSSTUI:
             freeze_backbone,
             gradient_checkpointing,
             save_training_state,
-            download,
             self._separator(),
             start_button,
             output,
@@ -1762,11 +1760,6 @@ class ColabProSSTUI:
             description="Batch size:",
             layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
         )
-        download = widgets.Checkbox(
-            value=True,
-            description="Download prediction CSV",
-            style={"description_width": "initial"},
-        )
         start_button = self._button("Start prediction", style="info")
         output = self._output()
 
@@ -1808,12 +1801,15 @@ class ColabProSSTUI:
                 batch_size=batch_size.value,
                 model_path=model.value,
                 structure_vocab_size=model_spec.structure_vocab_size,
-                download=download.value,
+                download=False,
             )
             self.latest_model_path = model.value
             self.latest_task_type = task_type.value
             self.latest_num_labels = num_labels.value
             self.display(result.head())
+            self._display_result_downloads(
+                ("predictions CSV", result.attrs.get("output_csv")),
+            )
 
         checkpoint.on_loaded(
             lambda metadata: self._apply_artifact_metadata(
@@ -1848,7 +1844,6 @@ class ColabProSSTUI:
             *csv_input.items,
             *structure_input.display_items,
             batch_size,
-            download,
             self._separator(),
             start_button,
             output,
@@ -1913,11 +1908,6 @@ class ColabProSSTUI:
             style={"description_width": "initial"},
             layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
         )
-        download = widgets.Checkbox(
-            value=True,
-            description="Download embedding ZIP",
-            style={"description_width": "initial"},
-        )
         start_button = self._button("Start embedding extraction", style="info")
         output = self._output()
         completion = self._html(
@@ -1971,7 +1961,7 @@ class ColabProSSTUI:
                 checkpoint_path=(
                     embedding_artifact.value if use_artifact else ""
                 ),
-                download=download.value,
+                download=False,
             )
             self.latest_model_path = model.value
             if "protein_embeddings" in result:
@@ -1986,11 +1976,16 @@ class ColabProSSTUI:
                 ]
                 print("residue embedding shapes:", residue_shapes)
             print("embedding package:", result["archive_path"])
+            self._display_result_downloads(
+                ("embedding ZIP", result["archive_path"]),
+                ("embeddings PT", result["output_pt"]),
+                ("embedding index CSV", result["output_index_csv"]),
+            )
             completion.value = (
                 "<b>Embedding extraction completed.</b><br>"
                 f"Package: <code>{result['archive_path']}</code><br>"
-                "You can keep using this interface while the browser finishes "
-                "the download."
+                "Use the result buttons to download the package or either "
+                "individual file."
             )
             completion.layout.display = None
 
@@ -2017,7 +2012,6 @@ class ColabProSSTUI:
             *structure_input.display_items,
             batch_size,
             max_length,
-            download,
             self._separator(),
             start_button,
             output,
@@ -2033,11 +2027,6 @@ class ColabProSSTUI:
             "Path to a one-row CSV with sequence and structure input",
         )
         structure_input = _StructureInput(self)
-        download = self.widgets.Checkbox(
-            value=True,
-            description="Download saturation ZIP",
-            style={"description_width": "initial"},
-        )
         start_button = self._button(
             "Start saturation mutagenesis",
             style="info",
@@ -2059,13 +2048,19 @@ class ColabProSSTUI:
                 structure_zip=structure_input.structure_zip,
                 model_path=model.value,
                 structure_vocab_size=model_spec.structure_vocab_size,
-                download=download.value,
+                download=False,
             )
             self.latest_model_path = model.value
             print("scored mutations:", len(result["score_table"]))
             print("saturation package:", result["archive_path"])
             self.display(self.Image(filename=result["output_heatmap_png"]))
             self.display(result["score_table"].head())
+            self._display_result_downloads(
+                ("saturation ZIP", result["archive_path"]),
+                ("mutation scores CSV", result["output_csv"]),
+                ("score matrix CSV", result["output_matrix_csv"]),
+                ("heatmap PNG", result["output_heatmap_png"]),
+            )
 
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, predict)
@@ -2085,7 +2080,6 @@ class ColabProSSTUI:
             self._heading("Protein input:", level=3),
             *csv_input.items,
             *structure_input.display_items,
-            download,
             self._separator(),
             start_button,
             output,
@@ -2101,11 +2095,6 @@ class ColabProSSTUI:
             "Path to a CSV with sequence, mutant, and structure input",
         )
         structure_input = _StructureInput(self)
-        download = widgets.Checkbox(
-            value=True,
-            description="Download mutation score CSV",
-            style={"description_width": "initial"},
-        )
         start_button = self._button("Start prediction", style="info")
         output = self._output()
 
@@ -2124,10 +2113,13 @@ class ColabProSSTUI:
                 structure_zip=structure_input.structure_zip,
                 model_path=model.value,
                 structure_vocab_size=model_spec.structure_vocab_size,
-                download=download.value,
+                download=False,
             )
             self.latest_model_path = model.value
             self.display(result.head())
+            self._display_result_downloads(
+                ("mutation scores CSV", result.attrs.get("output_csv")),
+            )
 
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, predict)
@@ -2154,7 +2146,6 @@ class ColabProSSTUI:
             ),
             *csv_input.items,
             *structure_input.display_items,
-            download,
             self._separator(),
             start_button,
             output,
@@ -2182,11 +2173,6 @@ class ColabProSSTUI:
             style={"description_width": "initial"},
             layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
         )
-        download = widgets.Checkbox(
-            value=True,
-            description="Download structure token CSV",
-            style={"description_width": "initial"},
-        )
         start_button = self._button("Convert structure", style="info")
         output = self._output()
         next_steps = self._html(
@@ -2210,10 +2196,13 @@ class ColabProSSTUI:
                 structure_path=structure.value,
                 chain_id=chain.value,
                 structure_vocab_size=vocab.value,
-                download=download.value,
+                download=False,
             )
             self.latest_model_path = model.value
             self.display(result)
+            self._display_result_downloads(
+                ("structure tokens CSV", result.attrs.get("output_csv")),
+            )
             next_steps.value = (
                 "<h3>Use these tokens in your next task</h3>"
                 "<ol>"
@@ -2245,7 +2234,6 @@ class ColabProSSTUI:
             *structure.items,
             chain,
             vocab,
-            download,
             self._separator(),
             start_button,
             output,

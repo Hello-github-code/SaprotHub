@@ -269,6 +269,10 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         self.assertEqual(positions, sorted(positions))
         self.assertIn("self.workflow.personal_hf_model_repo_id", share_source)
         self.assertIn("ProSSTHub organization access is not", share_source)
+        self.assertIn("token_input = widgets.Password", share_source)
+        self.assertIn('token_input.value = ""', share_source)
+        self.assertIn("with redirect_stdout(StringIO()):", share_source)
+        self.assertNotIn("notebook_login", share_source)
         self.assertNotIn(
             'description="Create a private ProSSTHub repository"', share_source
         )
@@ -4330,6 +4334,11 @@ class ColabProSSTWidgetTest(unittest.TestCase):
             for item in share_items
             if getattr(item, "description", "") == "Log in to Hugging Face"
         )
+        share_token = next(
+            item
+            for item in share_items
+            if getattr(item, "description", "") == "Token:"
+        )
         share_model = next(
             item
             for item in share_items
@@ -4348,6 +4357,11 @@ class ColabProSSTWidgetTest(unittest.TestCase):
         self.assertEqual(share_repo_name.value, "")
         self.assertFalse(share_update.value)
         self.assertEqual(share_login.button_style, "info")
+        self.assertEqual(share_token.value, "")
+        self.assertIn("write token", share_token.placeholder)
+        self.assertLess(
+            share_items.index(share_token), share_items.index(share_login)
+        )
         self.assertLess(
             share_items.index(share_login), share_items.index(share_model)
         )

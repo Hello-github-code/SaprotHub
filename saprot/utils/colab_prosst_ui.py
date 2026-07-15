@@ -2248,6 +2248,13 @@ class ColabProSSTUI:
             button_style="info",
             layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
         )
+        token_input = widgets.Password(
+            value="",
+            placeholder="Paste a Hugging Face write token (hf_...)",
+            description="Token:",
+            style={"description_width": "initial"},
+            layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
+        )
         login_help = self._html(
             "Log in first with a Hugging Face user access token that has write "
             "permission. The model will first be uploaded to your personal "
@@ -2259,7 +2266,12 @@ class ColabProSSTUI:
             max_width=self.GUIDE_WIDTH,
             overflow="visible",
         )
-        login_output = self._output()
+        login_status = self._html(
+            "",
+            width="100%",
+            max_width=self.GUIDE_WIDTH,
+            overflow="visible",
+        )
         repo_name = widgets.Text(
             value="",
             placeholder="ProSST-2048-Task-Method",
@@ -2325,12 +2337,48 @@ class ColabProSSTUI:
                 None if self._uses_category_count(change["new"]) else "none"
             )
 
-        def open_login(_button):
-            from huggingface_hub import notebook_login
+        def log_in(_button):
+            from contextlib import redirect_stdout
+            from io import StringIO
 
-            login_output.clear_output(wait=True)
-            with login_output:
-                notebook_login(new_session=True, write_permission=True)
+            from huggingface_hub import HfApi, login
+
+            token = token_input.value.strip()
+            token_input.value = ""
+            if not token:
+                login_status.value = (
+                    "<span style='color:#b3261e'>Paste a Hugging Face write "
+                    "token before logging in.</span>"
+                )
+                return
+
+            login_button.disabled = True
+            login_status.value = "Checking the token..."
+            try:
+                with redirect_stdout(StringIO()):
+                    login(
+                        token=token,
+                        add_to_git_credential=False,
+                        write_permission=True,
+                    )
+                account = HfApi().whoami()
+                username = str(account.get("name", "")).strip()
+                account_text = (
+                    f" Logged in as <b>{username}</b>." if username else ""
+                )
+                login_status.value = (
+                    "<span style='color:#137333'><b>Login successful.</b>"
+                    f"{account_text} The write token is saved in the Hugging "
+                    "Face cache for this Colab runtime.</span>"
+                )
+            except Exception as exc:
+                login_status.value = (
+                    "<span style='color:#b3261e'><b>Login failed:</b> "
+                    f"{type(exc).__name__}: {exc}</span>"
+                )
+            finally:
+                token = ""
+                login_button.disabled = False
 
         def upload():
             if not checkpoint.value:
@@ -2370,7 +2418,7 @@ class ColabProSSTUI:
             contribution_hint.layout.display = None
 
         task_type.observe(update_task, names="value")
-        login_button.on_click(open_login)
+        login_button.on_click(log_in)
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, upload)
         )
@@ -2380,8 +2428,9 @@ class ColabProSSTUI:
             ),
             self._heading("1. Log in to Hugging Face", level=3),
             login_help,
+            token_input,
             login_button,
-            login_output,
+            login_status,
             self._separator(),
             self._heading("2. Choose the model to share", level=3),
             *checkpoint.items,

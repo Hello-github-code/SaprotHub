@@ -693,6 +693,36 @@ class ColabProSSTUI:
             ),
         )
 
+    def _result_downloads(self, files):
+        buttons = []
+        for label, path in files:
+            if not path or not Path(path).is_file():
+                continue
+            button = self._button(
+                f"Download {label}",
+                width="320px",
+                style="success",
+            )
+            button.tooltip = str(path)
+            button.on_click(
+                lambda _button, download_path=str(path): (
+                    self.workflow.queue_download(download_path)
+                )
+            )
+            buttons.append(button)
+
+        if not buttons:
+            return None
+        return self._widget_stack(
+            self._heading("Download results", level=3),
+            *buttons,
+        )
+
+    def _display_result_downloads(self, *files):
+        downloads = self._result_downloads(files)
+        if downloads is not None:
+            self.display(downloads)
+
     def _model_dropdown(self, value=None):
         selected = value or self.latest_model_path
         if selected not in {spec.model_path for spec in PROSST_MODEL_SPECS}:

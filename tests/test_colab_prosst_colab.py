@@ -304,6 +304,16 @@ class ColabProSSTNotebookTest(unittest.TestCase):
         )
         self.assertNotIn("self.clear_output", stop_task_source)
 
+    def test_result_downloads_use_explicit_buttons(self):
+        source = UI_PATH.read_text(encoding="utf-8")
+        result_source = source.split("def _result_downloads(self,", 1)[1].split(
+            "def _model_dropdown(self,", 1
+        )[0]
+
+        self.assertIn('f"Download {label}"', result_source)
+        self.assertIn("self.workflow.queue_download(download_path)", result_source)
+        self.assertIn('style="success"', result_source)
+
     def test_navigation_uses_page_history_instead_of_a_hardcoded_home(self):
         source = UI_PATH.read_text(encoding="utf-8")
         navigation_source = source.split(
@@ -1221,10 +1231,12 @@ class ColabProSSTWorkflowTest(unittest.TestCase):
                 sys.modules,
                 {"google": fake_google, "google.colab": fake_colab},
             ):
-                workflow._download(output_path)
+                workflow.queue_download(str(output_path))
 
             self.assertEqual(workflow.pop_pending_download(), str(output_path))
             self.assertIsNone(workflow.pop_pending_download())
+            with self.assertRaises(FileNotFoundError):
+                workflow.queue_download(str(root / "missing.csv"))
 
     def test_training_learning_rate_reaches_model_config(self):
         with tempfile.TemporaryDirectory() as temporary_dir:

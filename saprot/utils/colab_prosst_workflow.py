@@ -110,6 +110,14 @@ class ColabProSSTWorkflow:
         self._pending_downloads.put(str(path))
         print("queued download:", path)
 
+    def queue_download(self, path: str) -> None:
+        download_path = Path(path)
+        if not download_path.is_file():
+            raise FileNotFoundError(
+                f"Download file does not exist: {download_path}"
+            )
+        self._download(download_path)
+
     def pop_pending_download(self) -> Optional[str]:
         try:
             return self._pending_downloads.get_nowait()
@@ -816,6 +824,7 @@ class ColabProSSTWorkflow:
             ]
         )
         df.to_csv(output_path, index=False)
+        df.attrs["output_csv"] = str(output_path)
 
         print("sequence length:", len(result["sequence"]))
         print("structure token length:", len(result["structure_tokens"]))
@@ -1111,6 +1120,7 @@ class ColabProSSTWorkflow:
             structure_vocab_size=structure_vocab_size,
             structure_base_dir=structure_base_dir,
         )
+        df.attrs["output_csv"] = str(output_path)
         print("saved mutation scores:", output_path)
         if download:
             self._download(output_path)
@@ -1622,6 +1632,7 @@ class ColabProSSTWorkflow:
             structure_vocab_size=structure_vocab_size,
             structure_base_dir=structure_base_dir,
         )
+        df.attrs["output_csv"] = str(output_path)
 
         print("saved predictions:", output_path)
         if download:

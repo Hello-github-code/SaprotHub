@@ -30,6 +30,8 @@ def normalize_protein_sequence(
     context: str = "sequence",
     max_residues: Optional[int] = ESMFOLD_MAX_RESIDUES,
 ) -> str:
+    if value is None or bool(pd.isna(value)):
+        raise ValueError(f"{context} is empty.")
     sequence = "".join(str(value).split()).upper()
     if not sequence:
         raise ValueError(f"{context} is empty.")

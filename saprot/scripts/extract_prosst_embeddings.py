@@ -154,7 +154,6 @@ def extract_embeddings(
             num_labels=checkpoint_num_labels,
             structure_vocab_size=structure_vocab_size,
             device=target_device,
-            load_pretrained=False,
         )
     else:
         model = AutoModelForMaskedLM.from_pretrained(

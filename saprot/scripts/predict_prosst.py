@@ -81,18 +81,21 @@ def load_prosst_downstream_model(
     num_labels: int,
     structure_vocab_size: int,
     device: torch.device,
-    load_pretrained: bool = False,
 ):
-    checkpoint = Path(checkpoint_path)
-    is_lora_adapter = checkpoint.is_dir()
-    if is_lora_adapter and not (checkpoint / "adapter_config.json").is_file():
+    adapter = Path(checkpoint_path)
+    if not adapter.is_dir():
         raise ValueError(
-            f"LoRA checkpoint directory has no adapter_config.json: {checkpoint}"
+            "ColabProSST prediction requires a LoRA adapter directory, not a "
+            f"full model checkpoint: {adapter}"
+        )
+    if not (adapter / "adapter_config.json").is_file():
+        raise ValueError(
+            f"ColabProSST adapter has no adapter_config.json: {adapter}"
         )
     common_kwargs = {
         "config_path": model_path,
         "structure_vocab_size": structure_vocab_size,
-        "load_pretrained": True if is_lora_adapter else load_pretrained,
+        "load_pretrained": True,
         "lr_scheduler_kwargs": {
             "class": "ConstantLRScheduler",
             "init_lr": 0.0,
@@ -103,16 +106,13 @@ def load_prosst_downstream_model(
             "weight_decay": 0.01,
         },
     }
-    if is_lora_adapter:
-        common_kwargs["lora_kwargs"] = {
-            "is_trainable": False,
-            "num_lora": 1,
-            "config_list": [
-                {"lora_config_path": str(checkpoint)}
-            ],
-        }
-    else:
-        common_kwargs["from_checkpoint"] = checkpoint_path
+    common_kwargs["lora_kwargs"] = {
+        "is_trainable": False,
+        "num_lora": 1,
+        "config_list": [
+            {"lora_config_path": str(adapter)}
+        ],
+    }
     if task_type == "classification":
         model = ProSSTClassificationModel(
             num_labels=num_labels,
@@ -147,26 +147,45 @@ def validate_checkpoint_compatibility(
     structure_vocab_size: int,
     num_labels: Optional[int] = None,
 ) -> None:
-    checkpoint = Path(checkpoint_path)
-    if checkpoint.is_dir():
-        metadata_path = checkpoint / LORA_METADATA_FILENAME
-        if not metadata_path.is_file():
-            return
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return
-    else:
-        try:
-            checkpoint_state = torch.load(checkpoint, map_location="cpu")
-        except Exception:
-            # The regular model loader will report unreadable checkpoints.
-            return
-        if not isinstance(checkpoint_state, dict):
-            return
-        metadata = checkpoint_state.get("colabprosst")
-    if not isinstance(metadata, dict):
-        return
+    adapter = Path(checkpoint_path)
+    if not adapter.is_dir():
+        raise ValueError(
+            "ColabProSST downstream models must be LoRA adapter directories."
+        )
+    adapter_config_path = adapter / "adapter_config.json"
+    if not adapter_config_path.is_file():
+        raise ValueError(
+            f"ColabProSST adapter is missing adapter_config.json: {adapter}"
+        )
+    metadata_path = adapter / LORA_METADATA_FILENAME
+    if not metadata_path.is_file():
+        raise ValueError(
+            f"ColabProSST adapter is missing {LORA_METADATA_FILENAME}: {adapter}"
+        )
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        adapter_config = json.loads(
+            adapter_config_path.read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"Could not read ColabProSST adapter metadata from {adapter}."
+        ) from exc
+    if not isinstance(metadata, dict) or not isinstance(adapter_config, dict):
+        raise ValueError("ColabProSST adapter metadata must be JSON objects.")
+    if str(metadata.get("checkpoint_format", "")).lower() != "peft_adapter":
+        raise ValueError(
+            "ColabProSST adapter metadata must declare "
+            "checkpoint_format='peft_adapter'."
+        )
+    if str(adapter_config.get("peft_type", "")).upper() != "LORA":
+        raise ValueError("ColabProSST supports LoRA PEFT adapters only.")
+    modules_to_save = adapter_config.get("modules_to_save") or []
+    if "classifier" not in modules_to_save:
+        raise ValueError(
+            "ColabProSST adapters must include the trainable task head in "
+            "modules_to_save=['classifier']."
+        )
 
     expected = {
         "task": task_type,
@@ -185,9 +204,9 @@ def validate_checkpoint_compatibility(
     ]
     if mismatches:
         raise ValueError(
-            "The ProSST checkpoint is incompatible with the selected settings: "
+            "The ProSST adapter is incompatible with the selected settings: "
             + "; ".join(mismatches)
-            + ". Select the checkpoint's original base model and task."
+            + ". Select the adapter's original base model and task."
         )
 
 
@@ -205,7 +224,6 @@ def predict_csv(
     max_length: int = 2046,
     device: str = None,
     structure_base_dir: str = None,
-    load_pretrained: bool = False,
 ) -> pd.DataFrame:
     if task_type not in SUPPORTED_TASK_TYPES:
         raise ValueError(
@@ -220,10 +238,8 @@ def predict_csv(
         structure_vocab_size,
     )
     if not checkpoint_path:
-        raise ValueError("checkpoint_path is required for ProSST prediction.")
+        raise ValueError("A ColabProSST adapter is required for prediction.")
     checkpoint = Path(checkpoint_path)
-    if not checkpoint.exists():
-        raise FileNotFoundError(f"ProSST checkpoint does not exist: {checkpoint}")
     validate_checkpoint_compatibility(
         str(checkpoint),
         task_type,
@@ -304,7 +320,6 @@ def predict_csv(
         num_labels,
         structure_vocab_size,
         device,
-        load_pretrained=load_pretrained,
     )
 
     output_chunks = []
@@ -415,15 +430,6 @@ def get_args():
     parser.add_argument("--max_length", type=int, default=2046)
     parser.add_argument("--device", default=None)
     parser.add_argument("--structure_base_dir", default=None)
-    parser.add_argument(
-        "--load_pretrained",
-        action="store_true",
-        help=(
-            "Load the full base ProSST weights before applying the checkpoint. "
-            "By default prediction builds the model from config because "
-            "ColabProSST checkpoints contain the full model state dict."
-        ),
-    )
     return parser.parse_args()
 
 
@@ -442,7 +448,6 @@ def main():
         max_length=args.max_length,
         device=args.device,
         structure_base_dir=args.structure_base_dir,
-        load_pretrained=args.load_pretrained,
     )
 
 

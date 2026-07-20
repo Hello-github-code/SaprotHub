@@ -369,6 +369,13 @@ class ColabProSSTWorkflow:
             ) from exc
 
         result = self._normalize_artifact_metadata(metadata)
+        validate_checkpoint_compatibility(
+            str(checkpoint),
+            result["task_type"],
+            result["model_path"],
+            result["structure_vocab_size"],
+            result.get("num_labels"),
+        )
         result.update(
             {
                 "artifact_path": str(checkpoint),

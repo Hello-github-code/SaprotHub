@@ -54,14 +54,6 @@ from saprot.utils.prosst_module_loader import (
 )
 
 
-RESUMABLE_CHECKPOINT_KEYS = {
-    "model",
-    "global_step",
-    "epoch",
-    "best_value",
-    "lr_scheduler",
-    "optimizer",
-}
 HF_REPO_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 INPUT_MODE_SEQUENCE = "sequence"
 INPUT_MODE_STRUCTURE = "structure"
@@ -363,55 +355,24 @@ class ColabProSSTWorkflow:
         return normalized
 
     def inspect_model_artifact(self, checkpoint_path: str) -> dict:
-        checkpoint = Path(str(checkpoint_path).strip())
-        if checkpoint.is_file() and checkpoint.suffix.lower() == ".zip":
-            checkpoint = Path(self.resolve_lora_adapter(str(checkpoint)))
-
-        if checkpoint.is_dir():
-            metadata_path = checkpoint / "colabprosst.json"
-            if not metadata_path.is_file():
-                raise ValueError(
-                    "LoRA adapter is missing colabprosst.json metadata."
-                )
-            try:
-                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
-                raise ValueError(
-                    f"Could not read LoRA metadata: {metadata_path}"
-                ) from exc
-            artifact_type = "lora"
-        elif checkpoint.is_file():
-            try:
-                state = torch.load(checkpoint, map_location="cpu")
-            except Exception as exc:
-                raise ValueError(
-                    f"Could not read ColabProSST checkpoint: {checkpoint}"
-                ) from exc
-            metadata = state.get("colabprosst") if isinstance(state, dict) else None
-            if not isinstance(metadata, dict):
-                sidecar = checkpoint.parent / "metadata.json"
-                if sidecar.is_file():
-                    try:
-                        metadata = json.loads(sidecar.read_text(encoding="utf-8"))
-                    except (OSError, json.JSONDecodeError) as exc:
-                        raise ValueError(
-                            f"Could not read checkpoint metadata: {sidecar}"
-                        ) from exc
-            if not isinstance(metadata, dict):
-                raise ValueError(
-                    "Full checkpoint is missing ColabProSST metadata."
-                )
-            artifact_type = "full"
-        else:
-            raise FileNotFoundError(
-                f"Model checkpoint or adapter does not exist: {checkpoint}"
+        checkpoint = Path(self.resolve_lora_adapter(checkpoint_path))
+        metadata_path = checkpoint / "colabprosst.json"
+        if not metadata_path.is_file():
+            raise ValueError(
+                "ColabProSST adapter is missing colabprosst.json metadata."
             )
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"Could not read ColabProSST adapter metadata: {metadata_path}"
+            ) from exc
 
         result = self._normalize_artifact_metadata(metadata)
         result.update(
             {
                 "artifact_path": str(checkpoint),
-                "artifact_type": artifact_type,
+                "artifact_type": "lora",
             }
         )
         return result
@@ -453,22 +414,13 @@ class ColabProSSTWorkflow:
             for path in snapshot_path.rglob("adapter_config.json")
             if ".cache" not in path.parts
         ]
-        full_candidates = [
-            path
-            for path in snapshot_path.rglob("model.pt")
-            if ".cache" not in path.parts
-        ]
-        artifact_candidates = [
-            *[("lora", path) for path in adapter_candidates],
-            *[("full", path) for path in full_candidates],
-        ]
-        if len(artifact_candidates) != 1:
+        if len(adapter_candidates) != 1:
             raise ValueError(
                 "A community repository must contain exactly one "
-                "ColabProSST model.pt or PEFT adapter; found "
-                f"{len(artifact_candidates)} artifacts."
+                "ColabProSST PEFT adapter; found "
+                f"{len(adapter_candidates)} adapters."
             )
-        _artifact_type, artifact_path = artifact_candidates[0]
+        artifact_path = adapter_candidates[0]
         result = self.inspect_model_artifact(str(artifact_path))
         result.update(
             {
@@ -1027,47 +979,6 @@ class ColabProSSTWorkflow:
             )
 
     @staticmethod
-    def _load_training_checkpoint(
-        checkpoint_path: str,
-        require_training_state: bool = False,
-    ) -> dict:
-        checkpoint = Path(str(checkpoint_path).strip())
-        if not checkpoint.is_file():
-            raise FileNotFoundError(
-                f"Training checkpoint does not exist: {checkpoint}"
-            )
-        try:
-            state = torch.load(checkpoint, map_location="cpu")
-        except Exception as exc:
-            raise ValueError(
-                f"Could not read ColabProSST checkpoint: {checkpoint}"
-            ) from exc
-        if not isinstance(state, dict) or not isinstance(
-            state.get("model"),
-            dict,
-        ):
-            raise ValueError(
-                "A ColabProSST training checkpoint must be a .pt dictionary "
-                "containing model weights under `model`."
-            )
-        missing = sorted(RESUMABLE_CHECKPOINT_KEYS - set(state))
-        print("initial checkpoint:", checkpoint)
-        print(
-            "checkpoint training state:",
-            "complete (exact resume available)"
-            if not missing
-            else "weights only (exact resume unavailable)",
-        )
-        if require_training_state and missing:
-            raise ValueError(
-                "Exact resume requires a checkpoint saved with optimizer "
-                f"state. Checkpoint: {checkpoint}. Missing fields: {missing}. "
-                "Upload the training-state checkpoint produced by the prior "
-                "run, or uncheck exact resume for weight-only fine-tuning."
-            )
-        return state
-
-    @staticmethod
     def _validate_task_name(task_name: str) -> str:
         task_name = str(task_name).strip()
         if (
@@ -1313,13 +1224,8 @@ class ColabProSSTWorkflow:
         batch_size: int = 1,
         model_path: str = MODEL_PROSST_2048,
         structure_vocab_size: Optional[int] = None,
-        freeze_backbone: bool = True,
         gradient_checkpointing: bool = True,
-        load_pretrained: bool = True,
-        initial_checkpoint: str = "",
-        resume_optimizer_state: bool = False,
-        save_training_state: bool = False,
-        training_method: str = "full",
+        initial_adapter: str = "",
         lora_rank: int = 8,
         lora_alpha: int = 16,
         lora_dropout: float = 0.05,
@@ -1332,10 +1238,6 @@ class ColabProSSTWorkflow:
             raise ValueError(f"Unsupported ProSST task_type: {task_type}.")
         if learning_rate <= 0:
             raise ValueError("learning_rate must be greater than zero.")
-        training_method = str(training_method).strip().lower()
-        if training_method not in {"full", "lora"}:
-            raise ValueError("training_method must be `full` or `lora`.")
-        use_lora = training_method == "lora"
         if lora_rank < 1:
             raise ValueError("LoRA rank must be at least 1.")
         if lora_alpha < 1:
@@ -1347,46 +1249,16 @@ class ColabProSSTWorkflow:
             model_path,
             structure_vocab_size,
         )
-        initial_checkpoint = str(initial_checkpoint or "").strip()
-        if resume_optimizer_state and not initial_checkpoint:
-            raise ValueError(
-                "Exact resume requires an initial ColabProSST checkpoint."
-            )
-        if use_lora and resume_optimizer_state:
-            raise ValueError(
-                "LoRA continuation reloads adapter weights with a new "
-                "optimizer; exact optimizer resume is available only for full "
-                "ColabProSST .pt checkpoints."
-            )
-        if use_lora and save_training_state:
-            raise ValueError(
-                "LoRA training saves a PEFT adapter rather than optimizer "
-                "state. Disable save_training_state."
-            )
-        if use_lora:
-            load_pretrained = True
-        if use_lora and initial_checkpoint:
-            initial_checkpoint = self.resolve_lora_adapter(initial_checkpoint)
+        initial_adapter = str(initial_adapter or "").strip()
+        if initial_adapter:
+            initial_adapter = self.resolve_lora_adapter(initial_adapter)
             validate_checkpoint_compatibility(
-                initial_checkpoint,
+                initial_adapter,
                 task_type,
                 model_path,
                 structure_vocab_size,
                 num_labels,
             )
-        elif initial_checkpoint:
-            self._load_training_checkpoint(
-                initial_checkpoint,
-                require_training_state=resume_optimizer_state,
-            )
-            validate_checkpoint_compatibility(
-                initial_checkpoint,
-                task_type,
-                model_path,
-                structure_vocab_size,
-                num_labels,
-            )
-            load_pretrained = False
 
         input_csv, prepared_input_csv = self._prepare_input_csv(
             input_csv,
@@ -1430,20 +1302,16 @@ class ColabProSSTWorkflow:
             "pair_regression": "prosst/prosst_pair_regression_dataset",
         }[task_type]
 
-        checkpoint_path = (
-            self.weight_dir / f"{task_name}_lora"
-            if use_lora
-            else self.weight_dir / f"{task_name}.pt"
-        )
+        adapter_path = self.weight_dir / f"{task_name}_lora"
         test_result_csv = self.output_dir / f"{task_name}_{task_type}_test_predictions.csv"
         model_kwargs = {
             "config_path": model_path,
             "structure_vocab_size": structure_vocab_size,
-            "load_pretrained": load_pretrained,
-            "freeze_backbone": False if use_lora else freeze_backbone,
+            "load_pretrained": True,
+            "freeze_backbone": False,
             "gradient_checkpointing": gradient_checkpointing,
-            "save_path": str(checkpoint_path),
-            "save_weights_only": not save_training_state,
+            "save_path": str(adapter_path),
+            "save_weights_only": True,
             "test_result_path": str(test_result_csv),
             "lr_scheduler_kwargs": {
                 "class": "ConstantLRScheduler",
@@ -1453,22 +1321,18 @@ class ColabProSSTWorkflow:
         }
         if task_type in CLASSIFICATION_TASK_TYPES:
             model_kwargs["num_labels"] = num_labels
-        if use_lora:
-            model_kwargs["lora_kwargs"] = {
-                "is_trainable": True,
-                "num_lora": 1,
-                "config_list": (
-                    [{"lora_config_path": initial_checkpoint}]
-                    if initial_checkpoint
-                    else []
-                ),
-                "r": int(lora_rank),
-                "lora_alpha": int(lora_alpha),
-                "lora_dropout": float(lora_dropout),
-            }
-        elif initial_checkpoint:
-            model_kwargs["from_checkpoint"] = initial_checkpoint
-            model_kwargs["load_prev_scheduler"] = resume_optimizer_state
+        model_kwargs["lora_kwargs"] = {
+            "is_trainable": True,
+            "num_lora": 1,
+            "config_list": (
+                [{"lora_config_path": initial_adapter}]
+                if initial_adapter
+                else []
+            ),
+            "r": int(lora_rank),
+            "lora_alpha": int(lora_alpha),
+            "lora_dropout": float(lora_dropout),
+        }
 
         config = EasyDict(
             {
@@ -1507,70 +1371,48 @@ class ColabProSSTWorkflow:
 
         try:
             trainer.fit(model=model, datamodule=data_module)
-
-            saved_final_resume_checkpoint = False
-            if (
-                resume_optimizer_state
-                and not use_lora
-                and not checkpoint_path.exists()
-            ):
+            if not adapter_path.exists():
                 print(
-                    "validation did not improve the previous best value; "
-                    "saving the final exact-resume state to",
-                    checkpoint_path,
+                    "validation did not save an adapter; saving the final "
+                    "training state to",
+                    adapter_path,
                 )
-                model.save_checkpoint(
-                    str(checkpoint_path),
-                    save_weights_only=not save_training_state,
-                )
-                saved_final_resume_checkpoint = True
-
-            if checkpoint_path.exists() and use_lora:
-                print("loading best LoRA adapter from", checkpoint_path)
-                model.load_lora_adapter(str(checkpoint_path))
-            elif checkpoint_path.exists() and not saved_final_resume_checkpoint:
-                print("loading best checkpoint from", checkpoint_path)
-                model.load_checkpoint(str(checkpoint_path))
-            elif saved_final_resume_checkpoint:
-                print("testing the final exact-resume model state")
-            else:
-                print("best checkpoint was not found; testing the current model state")
+                model.save_checkpoint(str(adapter_path), save_weights_only=True)
+            print("loading best LoRA adapter from", adapter_path)
+            model.load_lora_adapter(str(adapter_path))
 
             trainer.test(model=model, datamodule=data_module)
         finally:
             self._close_lmdb_datamodule(data_module)
 
         print("test predictions:", test_result_csv)
-        artifact_label = "LoRA adapter" if use_lora else "model checkpoint"
-        print(f"{artifact_label}:", checkpoint_path)
+        print("LoRA adapter:", adapter_path)
 
-        checkpoint_download_path = checkpoint_path
-        if use_lora and checkpoint_path.exists():
-            checkpoint_download_path = Path(
-                shutil.make_archive(
-                    str(checkpoint_path),
-                    "zip",
-                    root_dir=checkpoint_path,
-                )
+        adapter_download_path = Path(
+            shutil.make_archive(
+                str(adapter_path),
+                "zip",
+                root_dir=adapter_path,
             )
+        )
 
         if download:
             if test_result_csv.exists():
                 self._download(test_result_csv)
-            if checkpoint_download_path.exists():
-                self._download(checkpoint_download_path)
+            if adapter_download_path.exists():
+                self._download(adapter_download_path)
 
         return {
-            "checkpoint_path": str(checkpoint_path),
-            "checkpoint_download_path": str(checkpoint_download_path),
+            "adapter_path": str(adapter_path),
+            "adapter_download_path": str(adapter_download_path),
+            "checkpoint_path": str(adapter_path),
+            "checkpoint_download_path": str(adapter_download_path),
             "test_result_csv": str(test_result_csv),
             "task_type": task_type,
             "model_path": model_path,
             "structure_vocab_size": structure_vocab_size,
-            "initial_checkpoint": initial_checkpoint,
-            "resume_optimizer_state": bool(resume_optimizer_state),
-            "save_training_state": bool(save_training_state),
-            "training_method": training_method,
+            "initial_adapter": initial_adapter,
+            "training_method": "lora",
             "prepared_input_csv": prepared_input_csv,
         }
 
@@ -1595,9 +1437,7 @@ class ColabProSSTWorkflow:
             model_path,
             structure_vocab_size,
         )
-        checkpoint = Path(str(checkpoint_path).strip())
-        if checkpoint.is_dir() or checkpoint.suffix.lower() == ".zip":
-            checkpoint_path = self.resolve_lora_adapter(str(checkpoint))
+        checkpoint_path = self.resolve_lora_adapter(checkpoint_path)
 
         input_csv, prepared_input_csv = self._prepare_input_csv(
             input_csv,
@@ -1653,13 +1493,9 @@ class ColabProSSTWorkflow:
             structure_vocab_size,
         )
 
-        checkpoint = Path(checkpoint_path)
-        if checkpoint.is_dir() or checkpoint.suffix.lower() == ".zip":
-            checkpoint = Path(self.resolve_lora_adapter(str(checkpoint)))
-        if not checkpoint.exists():
-            raise FileNotFoundError(f"Checkpoint does not exist: {checkpoint}")
+        adapter = Path(self.resolve_lora_adapter(checkpoint_path))
         validate_checkpoint_compatibility(
-            str(checkpoint),
+            str(adapter),
             task_type,
             model_path,
             structure_vocab_size,
@@ -1681,21 +1517,12 @@ class ColabProSSTWorkflow:
         shutil.rmtree(package_dir, ignore_errors=True)
         package_dir.mkdir(parents=True, exist_ok=True)
 
-        is_lora = checkpoint.is_dir()
-        if is_lora:
-            for source in checkpoint.iterdir():
-                destination = package_dir / source.name
-                if source.is_dir():
-                    shutil.copytree(source, destination)
-                else:
-                    shutil.copy2(source, destination)
-        else:
-            shutil.copy2(checkpoint, package_dir / "model.pt")
-        checkpoint_format = (
-            "SaprotHub/ColabProSST PEFT adapter"
-            if is_lora
-            else "SaprotHub/ColabProSST torch checkpoint"
-        )
+        for source in adapter.iterdir():
+            destination = package_dir / source.name
+            if source.is_dir():
+                shutil.copytree(source, destination)
+            else:
+                shutil.copy2(source, destination)
         input_format = "amino-acid input_ids + ProSST ss_input_ids"
         if task_type in PAIR_TASK_TYPES:
             input_format = f"two sets of {input_format}"
@@ -1703,8 +1530,8 @@ class ColabProSSTWorkflow:
             "schema_version": 1,
             "model_family": "ProSST",
             "base_model": model_path,
-            "artifact_type": "lora" if is_lora else "full",
-            "checkpoint_format": checkpoint_format,
+            "artifact_type": "lora",
+            "checkpoint_format": "SaprotHub/ColabProSST PEFT adapter",
             "task_type": task_type,
             "input_format": input_format,
             "structure_vocab_size": structure_vocab_size,
@@ -1733,14 +1560,14 @@ tags:
 - prosst
 - colabprosst
 - prossthub
-{"- peft" if is_lora else "- pytorch"}
+- peft
 ---
 
 # {title}
 
 {description}
 
-This repository contains a SaprotHub/ColabProSST {"PEFT adapter" if is_lora else "checkpoint (`model.pt`)"} and metadata for a ProSST downstream model.
+This repository contains a SaprotHub/ColabProSST PEFT adapter and metadata for a ProSST downstream model. The task head is saved with the adapter, while the official ProSST backbone is loaded from `{model_path}`.
 
 ## Input Format
 
@@ -1751,13 +1578,13 @@ This repository contains a SaprotHub/ColabProSST {"PEFT adapter" if is_lora else
 - Task type: `{task_type}`
 - Base model: `{model_path}`
 - Structure vocabulary: `{structure_vocab_size}`
-- Artifact type: `{"LoRA / PEFT adapter" if is_lora else "full checkpoint"}`
+- Artifact type: `LoRA / PEFT adapter`
 
 In ColabProSST, choose **Hugging Face repository** as the model source and
 enter `{repo_id}`. The interface reads `metadata.json`, selects the matching
 official ProSST base model, and validates the task and structure vocabulary.
 
-Use `saprot/scripts/predict_prosst.py` from the ColabProSST `prosst` branch
+Use `saprot/scripts/predict_prosst.py` from SaprotHub
 to run prediction with this artifact outside the notebook.
 """
         (package_dir / "README.md").write_text(readme, encoding="utf-8")

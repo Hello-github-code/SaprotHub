@@ -1094,17 +1094,11 @@ class ColabProSSTUI:
             with self.system_status:
                 print("Task interrupted by user.")
 
-    def _download_templates(self, button, model_path=None):
+    def _download_templates(self, button):
         output = self.system_status
 
         def action():
-            spec = get_prosst_model_spec(
-                model_path or self.latest_model_path
-            )
-            self.workflow.create_csv_templates(
-                download=True,
-                structure_vocab_size=spec.structure_vocab_size,
-            )
+            self.workflow.create_csv_templates(download=True)
 
         self._start_task(button, output, action)
 
@@ -1114,9 +1108,6 @@ class ColabProSSTUI:
             "Please choose what you want to do with ColabProSST"
         )
         input_guide = self._input_guide()
-        template_model = self._model_dropdown()
-        template_model.description = "Template model:"
-        template_model.style = {"description_width": "initial"}
         template_button = self._button(
             "Download CSV templates", width="280px", style="info"
         )
@@ -1136,7 +1127,7 @@ class ColabProSSTUI:
         )
         share_button.on_click(lambda _button: self._navigate(self._share_page))
         template_button.on_click(
-            lambda button: self._download_templates(button, template_model.value)
+            lambda button: self._download_templates(button)
         )
 
         self._display_page(
@@ -1146,7 +1137,6 @@ class ColabProSSTUI:
             share_button,
             self._separator(),
             input_guide,
-            template_model,
             template_button,
         )
 
@@ -2024,154 +2014,6 @@ class ColabProSSTUI:
             self._separator(),
             start_button,
             output,
-        )
-
-    def _structure_page(self):
-        self.current_page = self._structure_page
-        widgets = self.widgets
-        model = self._model_dropdown()
-        source = widgets.ToggleButtons(
-            options=[
-                ("Sequence CSV - automatic", "sequence"),
-                ("One PDB/mmCIF file", "structure"),
-            ],
-            value="sequence",
-            description="Preparation source:",
-            style={"description_width": "initial"},
-            layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
-        )
-        source_help = self._html(
-            "",
-            width="100%",
-            max_width=self.GUIDE_WIDTH,
-            overflow="visible",
-        )
-        sequence_csv = _UploadField(
-            self,
-            "Sequence CSV:",
-            "CSV with sequence, or sequence_1 and sequence_2",
-        )
-        structure = _UploadField(
-            self,
-            "Structure file:",
-            "Path to one PDB or mmCIF file",
-        )
-        chain = widgets.Text(
-            value="",
-            placeholder="Leave empty to use all chains",
-            description="Chain:",
-            layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
-        )
-        vocab = widgets.IntText(
-            value=get_prosst_model_spec(model.value).structure_vocab_size,
-            description="Structure vocab:",
-            disabled=True,
-            style={"description_width": "initial"},
-            layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
-        )
-        start_button = self._button("Convert structure", style="info")
-        output = self._output()
-        next_steps = self._html(
-            "",
-            width="100%",
-            max_width=self.GUIDE_WIDTH,
-            overflow="visible",
-            display="none",
-        )
-
-        def update_model(change):
-            vocab.value = get_prosst_model_spec(
-                change["new"]
-            ).structure_vocab_size
-
-        def update_source(change):
-            use_sequence = change["new"] == "sequence"
-            sequence_csv.set_visible(use_sequence)
-            structure.set_visible(not use_sequence)
-            chain.layout.display = "none" if use_sequence else None
-            start_button.description = (
-                "Prepare token CSV" if use_sequence else "Convert structure"
-            )
-            source_help.value = (
-                "ColabProSST sends each sequence to the public ESMFold service, "
-                f"which accepts at most {ESMFOLD_MAX_RESIDUES} residues per "
-                "sequence. Results are cached in this runtime."
-                if use_sequence
-                else "The uploaded coordinates are quantized directly and are "
-                "not sent to the ESMFold service."
-            )
-
-        def convert():
-            if source.value == "sequence":
-                if not sequence_csv.value:
-                    raise ValueError("Upload a sequence CSV or enter its path.")
-                print("Preparing structures and ProSST tokens from sequences...")
-                result = self.workflow.prepare_sequence_input_csv(
-                    input_csv=sequence_csv.value,
-                    structure_vocab_size=vocab.value,
-                    download=False,
-                )
-            else:
-                if not structure.value:
-                    raise ValueError("Upload a PDB/mmCIF file or enter its path.")
-                print("Converting structure to ProSST tokens...")
-                result = self.workflow.convert_structure(
-                    structure_path=structure.value,
-                    chain_id=chain.value,
-                    structure_vocab_size=vocab.value,
-                    download=False,
-                )
-            self.latest_model_path = model.value
-            self.display(result.head())
-            self._display_result_downloads(
-                ("prepared token CSV", result.attrs.get("output_csv")),
-            )
-            next_steps.value = (
-                "<h3>Your reusable input CSV is ready</h3>"
-                "<ol>"
-                "<li>Download the <b>prepared token CSV</b> above.</li>"
-                "<li>Open training or the prediction task you need and upload "
-                "that downloaded CSV.</li>"
-                f"<li>Keep <b>{get_prosst_model_spec(model.value).display_name}</b> "
-                "selected, because tokens are specific to its structure "
-                "vocabulary.</li>"
-                "<li>Select <b>Prepared CSV with structure_tokens</b>.</li>"
-                "</ol>"
-                "The downloaded file already contains <code>sequence</code>, "
-                "<code>structure_tokens</code>, and "
-                "<code>structure_vocab_size</code>, so it can also be reused in "
-                "future Colab sessions. Add task-specific columns such as "
-                "<code>label</code>, <code>stage</code>, or <code>mutant</code> "
-                "when needed."
-            )
-            next_steps.layout.display = None
-
-        model.observe(update_model, names="value")
-        source.observe(update_source, names="value")
-        update_source({"new": source.value})
-        start_button.on_click(
-            lambda _button: self._start_task(start_button, output, convert)
-        )
-        self._display_page(
-            self._heading("Prepare reusable structure-token CSV"),
-            self._html(
-                "Use a sequence CSV for automatic batch preparation, or use an "
-                "existing experimental/predicted PDB or mmCIF structure for one "
-                "protein. All original CSV columns are kept in the output."
-            ),
-            self._heading("Model setting:", level=3),
-            model,
-            self._heading("Preparation input:", level=3),
-            source,
-            source_help,
-            *sequence_csv.items,
-            *structure.items,
-            chain,
-            vocab,
-            self._separator(),
-            start_button,
-            output,
-            next_steps,
         )
 
     def _share_page(self):

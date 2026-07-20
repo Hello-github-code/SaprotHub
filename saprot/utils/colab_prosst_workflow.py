@@ -495,18 +495,16 @@ class ColabProSSTWorkflow:
                 {
                     "sequence": "ACD",
                     "mutant": "D3A",
-                    "structure_tokens": "0 1 2",
-                    "structure_vocab_size": structure_vocab_size,
+                    "structure_file": "protein_1.pdb",
                 },
                 {
                     "sequence": "ACDE",
                     "mutant": "D3A:E4A",
-                    "structure_tokens": "0 1 2 3",
-                    "structure_vocab_size": structure_vocab_size,
+                    "structure_file": "protein_2.cif",
                 },
             ]
         ).to_csv(
-            template_home / "prosst_zero_shot_prepared_template.csv", index=False
+            template_home / "prosst_zero_shot_structure_template.csv", index=False
         )
 
         pd.DataFrame(
@@ -526,26 +524,23 @@ class ColabProSSTWorkflow:
                     "sequence": "ACD",
                     "label": 1,
                     "stage": "train",
-                    "structure_tokens": "0 1 2",
-                    "structure_vocab_size": structure_vocab_size,
+                    "structure_file": "train_protein.pdb",
                 },
                 {
                     "sequence": "ACE",
                     "label": 0,
                     "stage": "valid",
-                    "structure_tokens": "0 1 3",
-                    "structure_vocab_size": structure_vocab_size,
+                    "structure_file": "valid_protein.pdb",
                 },
                 {
                     "sequence": "ACF",
                     "label": 1,
                     "stage": "test",
-                    "structure_tokens": "0 1 4",
-                    "structure_vocab_size": structure_vocab_size,
+                    "structure_file": "test_protein.pdb",
                 },
             ]
         ).to_csv(
-            template_home / "prosst_classification_prepared_template.csv",
+            template_home / "prosst_classification_structure_template.csv",
             index=False,
         )
 
@@ -578,26 +573,23 @@ class ColabProSSTWorkflow:
                     "sequence": "ACD",
                     "residue_labels": "0 1 0",
                     "stage": "train",
-                    "structure_tokens": "0 1 2",
-                    "structure_vocab_size": structure_vocab_size,
+                    "structure_file": "train_protein.pdb",
                 },
                 {
                     "sequence": "ACE",
                     "residue_labels": "1 -100 0",
                     "stage": "valid",
-                    "structure_tokens": "0 1 3",
-                    "structure_vocab_size": structure_vocab_size,
+                    "structure_file": "valid_protein.pdb",
                 },
                 {
                     "sequence": "ACF",
                     "residue_labels": "0 1 1",
                     "stage": "test",
-                    "structure_tokens": "0 1 4",
-                    "structure_vocab_size": structure_vocab_size,
+                    "structure_file": "test_protein.pdb",
                 },
             ]
         ).to_csv(
-            template_home / "prosst_token_classification_prepared_template.csv",
+            template_home / "prosst_token_classification_structure_template.csv",
             index=False,
         )
 
@@ -630,26 +622,23 @@ class ColabProSSTWorkflow:
                     "sequence": "ACD",
                     "label": 0.5,
                     "stage": "train",
-                    "structure_tokens": "0 1 2",
-                    "structure_vocab_size": structure_vocab_size,
+                    "structure_file": "train_protein.pdb",
                 },
                 {
                     "sequence": "ACE",
                     "label": 0.2,
                     "stage": "valid",
-                    "structure_tokens": "0 1 3",
-                    "structure_vocab_size": structure_vocab_size,
+                    "structure_file": "valid_protein.pdb",
                 },
                 {
                     "sequence": "ACF",
                     "label": 0.8,
                     "stage": "test",
-                    "structure_tokens": "0 1 4",
-                    "structure_vocab_size": structure_vocab_size,
+                    "structure_file": "test_protein.pdb",
                 },
             ]
         ).to_csv(
-            template_home / "prosst_regression_prepared_template.csv", index=False
+            template_home / "prosst_regression_structure_template.csv", index=False
         )
 
         pd.DataFrame(
@@ -679,22 +668,22 @@ class ColabProSSTWorkflow:
                 "sequence_1": "ACD",
                 "sequence_2": "AC",
                 "stage": "train",
-                "structure_tokens_1": "0 1 2",
-                "structure_tokens_2": "3 4",
+                "structure_file_1": "train_protein_1.pdb",
+                "structure_file_2": "train_protein_2.pdb",
             },
             {
                 "sequence_1": "ACE",
                 "sequence_2": "AD",
                 "stage": "valid",
-                "structure_tokens_1": "0 1 3",
-                "structure_tokens_2": "0 2",
+                "structure_file_1": "valid_protein_1.pdb",
+                "structure_file_2": "valid_protein_2.pdb",
             },
             {
                 "sequence_1": "ACF",
                 "sequence_2": "AE",
                 "stage": "test",
-                "structure_tokens_1": "0 1 4",
-                "structure_tokens_2": "0 3",
+                "structure_file_1": "test_protein_1.pdb",
+                "structure_file_2": "test_protein_2.pdb",
             },
         ]
         pair_labels = {
@@ -714,15 +703,14 @@ class ColabProSSTWorkflow:
                 token_rows.append(
                     {
                         **common,
-                        "structure_tokens_1": example["structure_tokens_1"],
-                        "structure_tokens_2": example["structure_tokens_2"],
-                        "structure_vocab_size": structure_vocab_size,
+                        "structure_file_1": example["structure_file_1"],
+                        "structure_file_2": example["structure_file_2"],
                     }
                 )
                 sequence_rows.append(common)
 
             pd.DataFrame(token_rows).to_csv(
-                template_home / f"prosst_{task_type}_prepared_template.csv",
+                template_home / f"prosst_{task_type}_structure_template.csv",
                 index=False,
             )
             pd.DataFrame(sequence_rows).to_csv(
@@ -730,27 +718,25 @@ class ColabProSSTWorkflow:
                 index=False,
             )
 
-        single_input_tokens = pd.DataFrame(
+        single_input_structures = pd.DataFrame(
             [
                 {
                     "sequence": "ACD",
-                    "structure_tokens": "0 1 2",
-                    "structure_vocab_size": structure_vocab_size,
+                    "structure_file": "protein_1.pdb",
                 },
                 {
                     "sequence": "ACE",
-                    "structure_tokens": "0 1 3",
-                    "structure_vocab_size": structure_vocab_size,
+                    "structure_file": "protein_2.pdb",
                 },
             ]
         )
         for template_name in ["prediction", "embedding"]:
-            single_input_tokens.to_csv(
-                template_home / f"prosst_{template_name}_prepared_template.csv",
+            single_input_structures.to_csv(
+                template_home / f"prosst_{template_name}_structure_template.csv",
                 index=False,
             )
-        single_input_tokens.iloc[[0]].to_csv(
-            template_home / "prosst_saturation_prepared_template.csv",
+        single_input_structures.iloc[[0]].to_csv(
+            template_home / "prosst_saturation_structure_template.csv",
             index=False,
         )
 
@@ -772,14 +758,13 @@ class ColabProSSTWorkflow:
                 {
                     "sequence_1": example["sequence_1"],
                     "sequence_2": example["sequence_2"],
-                    "structure_tokens_1": example["structure_tokens_1"],
-                    "structure_tokens_2": example["structure_tokens_2"],
-                    "structure_vocab_size": structure_vocab_size,
+                    "structure_file_1": example["structure_file_1"],
+                    "structure_file_2": example["structure_file_2"],
                 }
                 for example in pair_examples[:2]
             ]
         ).to_csv(
-            template_home / "prosst_pair_prediction_prepared_template.csv",
+            template_home / "prosst_pair_prediction_structure_template.csv",
             index=False,
         )
         pd.DataFrame(
@@ -795,10 +780,24 @@ class ColabProSSTWorkflow:
             index=False,
         )
 
+        instructions_path = template_home / "README.txt"
+        instructions_path.write_text(
+            "ColabProSST input templates\n\n"
+            "Choose exactly one input method in the interface:\n"
+            "1. Sequence only: use a *_sequence_template.csv file.\n"
+            "2. Sequence + structure files: use a *_structure_template.csv "
+            "file, replace the example filenames, and upload the referenced "
+            "PDB/mmCIF files together as one Structure ZIP.\n\n"
+            "For protein-pair tasks, provide sequence_1, sequence_2, "
+            "structure_file_1, and structure_file_2. Optional chain, chain_1, "
+            "and chain_2 columns can select a chain from a structure file.\n",
+            encoding="utf-8",
+        )
         template_zip = template_home / "prosst_csv_templates.zip"
         with zipfile.ZipFile(template_zip, "w") as archive:
             for csv_path in sorted(template_home.glob("*.csv")):
                 archive.write(csv_path, arcname=csv_path.name)
+            archive.write(instructions_path, arcname=instructions_path.name)
 
         print("template directory:", template_home)
         print("template zip:", template_zip)

@@ -122,7 +122,7 @@ def predict_structure_with_esmfold(
     raise ESMFoldPredictionError(
         "Automatic structure prediction failed after "
         f"{max_retries + 1} attempts. The public ESMFold service may be busy; "
-        "retry later or use a prepared structure-token CSV."
+        "retry later or use the sequence + structure files input method."
     ) from last_error
 
 

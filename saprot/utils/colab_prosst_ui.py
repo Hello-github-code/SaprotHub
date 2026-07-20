@@ -386,7 +386,7 @@ class _ModelArtifactField:
         if not self.repo_id.value.strip():
             raise ValueError("Enter a Hugging Face repository ID.")
         print("Downloading and inspecting the Hub model...")
-        result = self.ui.workflow.download_community_checkpoint(
+        result = self.ui.workflow.download_community_adapter(
             repo_id=self.repo_id.value,
             revision=self.revision.value,
         )
@@ -619,7 +619,7 @@ class ColabProSSTUI:
         self.current_page = None
         self.navigation_history = []
         self.active_thread = None
-        self.latest_checkpoint = ""
+        self.latest_adapter = ""
         self.latest_model_path = DEFAULT_PROSST_MODEL.model_path
         self.latest_task_type = "classification"
         self.latest_num_labels = 2
@@ -741,7 +741,7 @@ class ColabProSSTUI:
         model_widget.value = metadata["model_path"]
         if metadata.get("num_labels") is not None:
             num_labels_widget.value = int(metadata["num_labels"])
-        self.latest_checkpoint = metadata["artifact_path"]
+        self.latest_adapter = metadata["artifact_path"]
         self.latest_model_path = metadata["model_path"]
         self.latest_task_type = metadata["task_type"]
         if metadata.get("num_labels") is not None:
@@ -1214,7 +1214,7 @@ class ColabProSSTUI:
             "Initial adapter:",
             "Path to a ColabProSST adapter directory or ZIP",
         )
-        initial_adapter.value = self.latest_checkpoint
+        initial_adapter.value = self.latest_adapter
         adapter_help = (
             "Upload a ColabProSST adapter ZIP, enter an extracted adapter "
             "directory, or load a compatible ProSSTHub repository. The adapter "
@@ -1371,7 +1371,7 @@ class ColabProSSTUI:
                 lora_dropout=lora_dropout.value,
                 download=False,
             )
-            self.latest_checkpoint = result["adapter_path"]
+            self.latest_adapter = result["adapter_path"]
             self.latest_model_path = result["model_path"]
             self.latest_task_type = result["task_type"]
             self.latest_num_labels = num_labels.value
@@ -1521,12 +1521,12 @@ class ColabProSSTUI:
             overflow="visible",
         )
         model = self._model_dropdown()
-        checkpoint = _ModelArtifactField(
+        adapter = _ModelArtifactField(
             self,
             "Fine-tuned adapter:",
             "Path to a ColabProSST adapter directory or ZIP",
         )
-        checkpoint.value = self.latest_checkpoint
+        adapter.value = self.latest_adapter
         csv_input = _UploadField(
             self,
             "Prediction CSV:",
@@ -1560,7 +1560,7 @@ class ColabProSSTUI:
             )
 
         def predict():
-            if not checkpoint.value:
+            if not adapter.value:
                 raise ValueError(
                     "Upload a ColabProSST adapter or enter its path."
                 )
@@ -1575,7 +1575,7 @@ class ColabProSSTUI:
             result = self.workflow.predict_downstream(
                 task_type=task_type.value,
                 input_csv=csv_input.value,
-                checkpoint_path=checkpoint.value,
+                adapter_path=adapter.value,
                 input_mode=structure_input.input_mode,
                 structure_zip=structure_input.structure_zip,
                 num_labels=num_labels.value,
@@ -1592,7 +1592,7 @@ class ColabProSSTUI:
                 ("predictions CSV", result.attrs.get("output_csv")),
             )
 
-        checkpoint.on_loaded(
+        adapter.on_loaded(
             lambda metadata: self._apply_artifact_metadata(
                 metadata,
                 task_type,
@@ -1614,7 +1614,7 @@ class ColabProSSTUI:
             prediction_help,
             self._heading("Choose the model for prediction:", level=3),
             model,
-            *checkpoint.items,
+            *adapter.items,
             self._html(
                 "Use an extracted ColabProSST adapter directory, a downloaded "
                 "adapter ZIP, or a compatible ProSSTHub repository. The task "
@@ -1666,7 +1666,7 @@ class ColabProSSTUI:
             "Fine-tuned adapter:",
             "Path to a ColabProSST adapter directory or ZIP",
         )
-        embedding_artifact.value = self.latest_checkpoint
+        embedding_artifact.value = self.latest_adapter
         embedding_artifact.set_visible(False)
         csv_input = _UploadField(
             self,
@@ -1710,7 +1710,7 @@ class ColabProSSTUI:
                     f"base model; found {metadata['model_path']}."
                 )
             model.value = metadata["model_path"]
-            self.latest_checkpoint = metadata["artifact_path"]
+            self.latest_adapter = metadata["artifact_path"]
             self.latest_model_path = metadata["model_path"]
 
         def extract():
@@ -1739,7 +1739,7 @@ class ColabProSSTUI:
                 level=level.value,
                 batch_size=batch_size.value,
                 max_length=max_length.value,
-                checkpoint_path=(
+                adapter_path=(
                     embedding_artifact.value if use_artifact else ""
                 ),
                 download=False,
@@ -1913,7 +1913,7 @@ class ColabProSSTUI:
                 "<b>Zero-shot model note:</b> This task calculates "
                 "<code>log P(mutant) - log P(wild type)</code> from an official "
                 "pretrained ProSST masked-language model. Protein-level "
-                "classification and regression checkpoints do not provide this "
+                "classification and regression adapters do not provide this "
                 "mutation score; use them under <b>Protein property "
                 "prediction</b> instead.",
                 width="100%",
@@ -1926,7 +1926,7 @@ class ColabProSSTUI:
                 "<code>mutant</code>. Then choose sequence + structure files or "
                 "automatic sequence-only preparation. Zero-shot mutation "
                 "scoring uses official "
-                "ProSST family models, not downstream fine-tuned checkpoints."
+                "ProSST family models, not downstream fine-tuned adapters."
             ),
             *csv_input.items,
             *structure_input.display_items,
@@ -1985,12 +1985,12 @@ class ColabProSSTUI:
             max_width=self.GUIDE_WIDTH,
             overflow="visible",
         )
-        checkpoint = _ModelArtifactField(
+        adapter = _ModelArtifactField(
             self,
             "ColabProSST adapter:",
             "Path to a ColabProSST adapter directory or ZIP",
         )
-        checkpoint.value = self.latest_checkpoint
+        adapter.value = self.latest_adapter
         model = self._model_dropdown()
         task_type = self._task_dropdown(self.latest_task_type)
         num_labels = self._num_labels()
@@ -2076,7 +2076,7 @@ class ColabProSSTUI:
                 login_button.disabled = False
 
         def upload():
-            if not checkpoint.value:
+            if not adapter.value:
                 raise ValueError(
                     "Upload a ColabProSST adapter or enter its path."
                 )
@@ -2087,9 +2087,9 @@ class ColabProSSTUI:
             print("Uploading model to your Hugging Face account...")
             print("Target repository:", repo_id)
             model_spec = get_prosst_model_spec(model.value)
-            package = self.workflow.upload_checkpoint_to_hf(
+            package = self.workflow.upload_adapter_to_hf(
                 repo_id=repo_id,
-                checkpoint_path=checkpoint.value,
+                adapter_path=adapter.value,
                 task_type=task_type.value,
                 num_labels=num_labels.value,
                 model_path=model.value,
@@ -2113,7 +2113,7 @@ class ColabProSSTUI:
             contribution_hint.layout.display = None
 
         task_type.observe(update_task, names="value")
-        checkpoint.on_loaded(
+        adapter.on_loaded(
             lambda metadata: self._apply_artifact_metadata(
                 metadata,
                 task_type,
@@ -2136,7 +2136,7 @@ class ColabProSSTUI:
             login_status,
             self._separator(),
             self._heading("2. Choose the model to share", level=3),
-            *checkpoint.items,
+            *adapter.items,
             model,
             task_type,
             num_labels,

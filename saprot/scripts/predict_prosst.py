@@ -77,12 +77,12 @@ LORA_METADATA_FILENAME = "colabprosst.json"
 def load_prosst_downstream_model(
     task_type: str,
     model_path: str,
-    checkpoint_path: str,
+    adapter_path: str,
     num_labels: int,
     structure_vocab_size: int,
     device: torch.device,
 ):
-    adapter = Path(checkpoint_path)
+    adapter = Path(adapter_path)
     if not adapter.is_dir():
         raise ValueError(
             "ColabProSST prediction requires an extracted LoRA adapter "
@@ -140,14 +140,14 @@ def load_prosst_downstream_model(
     return model
 
 
-def validate_checkpoint_compatibility(
-    checkpoint_path: str,
+def validate_adapter_compatibility(
+    adapter_path: str,
     task_type: str,
     model_path: str,
     structure_vocab_size: int,
     num_labels: Optional[int] = None,
 ) -> None:
-    adapter = Path(checkpoint_path)
+    adapter = Path(adapter_path)
     if not adapter.is_dir():
         raise ValueError(
             "ColabProSST downstream models must be LoRA adapter directories."
@@ -198,7 +198,7 @@ def validate_checkpoint_compatibility(
     ):
         expected["num_labels"] = int(num_labels)
     mismatches = [
-        f"{key}={metadata[key]!r} (checkpoint), expected {value!r}"
+        f"{key}={metadata[key]!r} (adapter), expected {value!r}"
         for key, value in expected.items()
         if key in metadata and metadata[key] != value
     ]
@@ -215,7 +215,7 @@ def predict_csv(
     input_csv: str,
     output_csv: str,
     task_type: str,
-    checkpoint_path: str,
+    adapter_path: str,
     model_path: str = "AI4Protein/ProSST-2048",
     num_labels: int = 2,
     batch_size: int = 1,
@@ -237,11 +237,11 @@ def predict_csv(
         model_path,
         structure_vocab_size,
     )
-    if not checkpoint_path:
+    if not adapter_path:
         raise ValueError("A ColabProSST adapter is required for prediction.")
-    checkpoint = Path(checkpoint_path)
-    validate_checkpoint_compatibility(
-        str(checkpoint),
+    adapter = Path(adapter_path)
+    validate_adapter_compatibility(
+        str(adapter),
         task_type,
         model_path,
         structure_vocab_size,
@@ -316,7 +316,7 @@ def predict_csv(
     model = load_prosst_downstream_model(
         task_type,
         model_path,
-        checkpoint_path,
+        adapter_path,
         num_labels,
         structure_vocab_size,
         device,
@@ -421,7 +421,7 @@ def get_args():
         required=True,
         choices=sorted(SUPPORTED_TASK_TYPES),
     )
-    parser.add_argument("--checkpoint_path", required=True)
+    parser.add_argument("--adapter_path", required=True)
     parser.add_argument("--model_path", default="AI4Protein/ProSST-2048")
     parser.add_argument("--num_labels", type=int, default=2)
     parser.add_argument("--batch_size", type=int, default=1)
@@ -439,7 +439,7 @@ def main():
         input_csv=args.input_csv,
         output_csv=args.output_csv,
         task_type=args.task_type,
-        checkpoint_path=args.checkpoint_path,
+        adapter_path=args.adapter_path,
         model_path=args.model_path,
         num_labels=args.num_labels,
         batch_size=args.batch_size,

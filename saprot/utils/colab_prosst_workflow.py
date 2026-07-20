@@ -38,7 +38,7 @@ from saprot.scripts.predict_prosst import (
     PAIR_TASK_TYPES,
     SUPPORTED_TASK_TYPES,
     predict_csv,
-    validate_checkpoint_compatibility,
+    validate_adapter_compatibility,
 )
 from saprot.model.prosst.specs import (
     DEFAULT_PROSST_MODEL,
@@ -284,30 +284,30 @@ class ColabProSSTWorkflow:
                     raise ValueError(f"Unsafe zip member path: {member.filename}")
                 archive.extract(member, target_dir)
 
-    def resolve_lora_adapter(self, checkpoint_path: str) -> str:
-        checkpoint = Path(str(checkpoint_path).strip())
-        if checkpoint.is_file() and checkpoint.suffix.lower() == ".zip":
-            target_dir = self.saprothub_dir / "loaded_lora" / checkpoint.stem
+    def resolve_lora_adapter(self, adapter_path: str) -> str:
+        adapter = Path(str(adapter_path).strip())
+        if adapter.is_file() and adapter.suffix.lower() == ".zip":
+            target_dir = self.saprothub_dir / "loaded_lora" / adapter.stem
             shutil.rmtree(target_dir, ignore_errors=True)
             target_dir.mkdir(parents=True, exist_ok=True)
-            self._extract_zip_archive(checkpoint, target_dir)
+            self._extract_zip_archive(adapter, target_dir)
             candidates = sorted(target_dir.rglob("adapter_config.json"))
             if len(candidates) != 1:
                 raise ValueError(
                     "A LoRA ZIP must contain exactly one adapter_config.json; "
                     f"found {len(candidates)}."
                 )
-            checkpoint = candidates[0].parent
+            adapter = candidates[0].parent
 
-        if not checkpoint.is_dir():
+        if not adapter.is_dir():
             raise FileNotFoundError(
-                f"LoRA adapter directory or ZIP does not exist: {checkpoint}"
+                f"LoRA adapter directory or ZIP does not exist: {adapter}"
             )
-        if not (checkpoint / "adapter_config.json").is_file():
+        if not (adapter / "adapter_config.json").is_file():
             raise ValueError(
-                f"LoRA adapter has no adapter_config.json: {checkpoint}"
+                f"LoRA adapter has no adapter_config.json: {adapter}"
             )
-        return str(checkpoint)
+        return str(adapter)
 
     @staticmethod
     def _normalize_artifact_metadata(metadata: dict) -> dict:
@@ -337,7 +337,7 @@ class ColabProSSTWorkflow:
             )
         if normalized["task_type"] not in SUPPORTED_TASK_TYPES:
             raise ValueError(
-                "Unsupported community checkpoint task: "
+                "Unsupported community adapter task: "
                 f"{normalized['task_type']!r}."
             )
         normalized["structure_vocab_size"] = int(
@@ -354,9 +354,9 @@ class ColabProSSTWorkflow:
             )
         return normalized
 
-    def inspect_model_artifact(self, checkpoint_path: str) -> dict:
-        checkpoint = Path(self.resolve_lora_adapter(checkpoint_path))
-        metadata_path = checkpoint / "colabprosst.json"
+    def inspect_model_artifact(self, adapter_path: str) -> dict:
+        adapter = Path(self.resolve_lora_adapter(adapter_path))
+        metadata_path = adapter / "colabprosst.json"
         if not metadata_path.is_file():
             raise ValueError(
                 "ColabProSST adapter is missing colabprosst.json metadata."
@@ -369,8 +369,8 @@ class ColabProSSTWorkflow:
             ) from exc
 
         result = self._normalize_artifact_metadata(metadata)
-        validate_checkpoint_compatibility(
-            str(checkpoint),
+        validate_adapter_compatibility(
+            str(adapter),
             result["task_type"],
             result["model_path"],
             result["structure_vocab_size"],
@@ -378,13 +378,13 @@ class ColabProSSTWorkflow:
         )
         result.update(
             {
-                "artifact_path": str(checkpoint),
+                "artifact_path": str(adapter),
                 "artifact_type": "lora",
             }
         )
         return result
 
-    def download_community_checkpoint(
+    def download_community_adapter(
         self,
         repo_id: str,
         revision: str = "",
@@ -1129,7 +1129,7 @@ class ColabProSSTWorkflow:
         max_length: int = 2046,
         output_pt: Optional[str] = None,
         output_index_csv: Optional[str] = None,
-        checkpoint_path: str = "",
+        adapter_path: str = "",
         download: bool = True,
         input_mode: str = INPUT_MODE_TOKENS,
         structure_zip: str = "",
@@ -1143,11 +1143,11 @@ class ColabProSSTWorkflow:
             model_path,
             structure_vocab_size,
         )
-        checkpoint_path = str(checkpoint_path or "").strip()
+        adapter_path = str(adapter_path or "").strip()
         artifact_metadata = None
-        if checkpoint_path:
-            artifact_metadata = self.inspect_model_artifact(checkpoint_path)
-            checkpoint_path = artifact_metadata["artifact_path"]
+        if adapter_path:
+            artifact_metadata = self.inspect_model_artifact(adapter_path)
+            adapter_path = artifact_metadata["artifact_path"]
             if artifact_metadata["model_path"] != model_path:
                 raise ValueError(
                     "Embedding artifact base model does not match the selected "
@@ -1191,11 +1191,11 @@ class ColabProSSTWorkflow:
             batch_size=batch_size,
             max_length=max_length,
             structure_base_dir=None,
-            checkpoint_path=checkpoint_path,
-            checkpoint_task_type=(
+            adapter_path=adapter_path,
+            adapter_task_type=(
                 artifact_metadata["task_type"] if artifact_metadata else None
             ),
-            checkpoint_num_labels=(
+            adapter_num_labels=(
                 artifact_metadata.get("num_labels") or 2
                 if artifact_metadata
                 else 2
@@ -1259,7 +1259,7 @@ class ColabProSSTWorkflow:
         initial_adapter = str(initial_adapter or "").strip()
         if initial_adapter:
             initial_adapter = self.resolve_lora_adapter(initial_adapter)
-            validate_checkpoint_compatibility(
+            validate_adapter_compatibility(
                 initial_adapter,
                 task_type,
                 model_path,
@@ -1419,8 +1419,6 @@ class ColabProSSTWorkflow:
         return {
             "adapter_path": str(adapter_path),
             "adapter_download_path": str(adapter_download_path),
-            "checkpoint_path": str(adapter_path),
-            "checkpoint_download_path": str(adapter_download_path),
             "test_result_csv": str(test_result_csv),
             "task_type": task_type,
             "model_path": model_path,
@@ -1433,7 +1431,7 @@ class ColabProSSTWorkflow:
         self,
         task_type: str,
         input_csv: str,
-        checkpoint_path: str,
+        adapter_path: str,
         upload_csv: bool = False,
         num_labels: int = 2,
         batch_size: int = 1,
@@ -1450,7 +1448,7 @@ class ColabProSSTWorkflow:
             model_path,
             structure_vocab_size,
         )
-        checkpoint_path = self.resolve_lora_adapter(checkpoint_path)
+        adapter_path = self.resolve_lora_adapter(adapter_path)
 
         input_csv, prepared_input_csv = self._prepare_input_csv(
             input_csv,
@@ -1467,7 +1465,7 @@ class ColabProSSTWorkflow:
             input_csv=input_csv,
             output_csv=str(output_path),
             task_type=task_type,
-            checkpoint_path=checkpoint_path,
+            adapter_path=adapter_path,
             model_path=model_path,
             num_labels=num_labels,
             batch_size=batch_size,
@@ -1483,10 +1481,10 @@ class ColabProSSTWorkflow:
             self._download(output_path)
         return df
 
-    def upload_checkpoint_to_hf(
+    def upload_adapter_to_hf(
         self,
         repo_id: str,
-        checkpoint_path: str,
+        adapter_path: str,
         task_type: str,
         num_labels: int = 2,
         model_path: str = MODEL_PROSST_2048,
@@ -1506,8 +1504,8 @@ class ColabProSSTWorkflow:
             structure_vocab_size,
         )
 
-        adapter = Path(self.resolve_lora_adapter(checkpoint_path))
-        validate_checkpoint_compatibility(
+        adapter = Path(self.resolve_lora_adapter(adapter_path))
+        validate_adapter_compatibility(
             str(adapter),
             task_type,
             model_path,

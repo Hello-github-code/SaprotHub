@@ -1375,6 +1375,14 @@ class ColabProSSTWorkflow:
         data_module = my_load_dataset(config.dataset)
         trainer = load_trainer(config)
 
+        # The initial adapter is already loaded into memory at this point.
+        # Remove same-name outputs so a previous run cannot be mistaken for the
+        # best adapter or test predictions from this run.
+        if adapter_path.exists():
+            shutil.rmtree(adapter_path)
+        if test_result_csv.exists():
+            test_result_csv.unlink()
+
         try:
             trainer.fit(model=model, datamodule=data_module)
             if not adapter_path.exists():

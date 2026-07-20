@@ -1488,7 +1488,7 @@ class ColabProSSTWorkflow:
         private: bool = False,
         run_login: bool = True,
         title: str = "ColabProSST model",
-        description: str = "A ProSST checkpoint trained with ColabProSST.",
+        description: str = "A ProSST adapter trained with ColabProSST.",
         download_package: bool = False,
         allow_update: bool = False,
     ) -> Path:

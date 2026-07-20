@@ -724,7 +724,6 @@ class ColabProSSTUI:
         task_widget,
         model_widget,
         num_labels_widget,
-        training_method_widget=None,
     ):
         task_values = {value for _label, value in task_widget.options}
         model_values = {value for _label, value in model_widget.options}
@@ -742,10 +741,6 @@ class ColabProSSTUI:
         model_widget.value = metadata["model_path"]
         if metadata.get("num_labels") is not None:
             num_labels_widget.value = int(metadata["num_labels"])
-        if training_method_widget is not None:
-            training_method_widget.value = (
-                "lora" if metadata["artifact_type"] == "lora" else "full"
-            )
         self.latest_checkpoint = metadata["artifact_path"]
         self.latest_model_path = metadata["model_path"]
         self.latest_task_type = metadata["task_type"]
@@ -1157,15 +1152,15 @@ class ColabProSSTUI:
             self._task_intro("classification"), width=self.WIDTH
         )
         model = self._model_dropdown()
-        training_method = widgets.ToggleButtons(
-            options=[
-                ("Standard / full checkpoint", "full"),
-                ("LoRA / PEFT adapter", "lora"),
-            ],
-            value="full",
-            description="Training method:",
-            style={"description_width": "initial"},
-            layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
+        training_method_help = self._html(
+            "<b>Training method: LoRA fine-tuning.</b> ColabProSST trains the "
+            "complete task head and LoRA parameters inside the ProSST backbone. "
+            "The official backbone weights remain frozen. The result is a "
+            "compact PEFT adapter ZIP that ColabProSST can load together with "
+            "the selected official ProSST model.",
+            width="100%",
+            max_width=self.GUIDE_WIDTH,
+            overflow="visible",
         )
         lora_rank = widgets.BoundedIntText(
             value=8,
@@ -1196,10 +1191,9 @@ class ColabProSSTUI:
             layout=widgets.Layout(width=self.WIDTH, display="none"),
         )
         lora_help = self._html(
-            "LoRA trains low-rank adapters in ProSST attention/feed-forward "
-            "layers together with the task head. The output is a compact PEFT "
-            "adapter ZIP. When continuing an adapter, its saved r/alpha/dropout "
-            "configuration is reused.",
+            "These settings apply when starting from an official ProSST model. "
+            "When continuing an adapter, its saved rank, alpha, and dropout are "
+            "reused and training starts with a new optimizer.",
             width="100%",
             max_width=self.GUIDE_WIDTH,
             overflow="visible",
@@ -1207,43 +1201,29 @@ class ColabProSSTUI:
         )
         training_start = widgets.ToggleButtons(
             options=[
-                ("Fresh official model", "fresh"),
-                ("Continue from checkpoint", "checkpoint"),
+                ("Start from official ProSST", "fresh"),
+                ("Continue from a ColabProSST adapter", "adapter"),
             ],
             value="fresh",
             description="Training start:",
             style={"description_width": "initial"},
             layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
         )
-        initial_checkpoint = _ModelArtifactField(
+        initial_adapter = _ModelArtifactField(
             self,
-            "Initial checkpoint:",
-            "Path to a compatible ColabProSST .pt checkpoint",
+            "Initial adapter:",
+            "Path to a ColabProSST adapter directory or ZIP",
         )
-        initial_checkpoint.value = self.latest_checkpoint
-        resume_optimizer_state = widgets.Checkbox(
-            value=False,
-            description="Restore optimizer and scheduler (exact resume)",
-            style={"description_width": "initial"},
-            layout=widgets.Layout(display="none"),
-        )
-        full_checkpoint_help = (
-            "<b>Weight-only fine-tuning:</b> leave exact resume unchecked to "
-            "load model weights and start a new optimizer. The checkpoint must "
-            "use the same task, base model, structure vocabulary, and category "
-            "count.<br><b>Exact resume:</b> also restores optimizer, scheduler, "
-            "epoch, and best validation value; it requires a checkpoint saved "
-            "with training state. The Epoch setting specifies how many "
-            "additional epochs to run."
-        )
-        lora_checkpoint_help = (
-            "Upload a ColabProSST LoRA adapter ZIP or enter an extracted adapter "
-            "directory. Adapter weights are continued with a new optimizer; "
+        initial_adapter.value = self.latest_checkpoint
+        adapter_help = (
+            "Upload a ColabProSST adapter ZIP, enter an extracted adapter "
+            "directory, or load a compatible ProSSTHub repository. The adapter "
+            "and its saved task head are continued with a new optimizer; "
             "the task, base model, structure vocabulary, and category count "
             "must match."
         )
-        checkpoint_help = self._html(
-            full_checkpoint_help,
+        adapter_help_widget = self._html(
+            adapter_help,
             width="100%",
             max_width=self.GUIDE_WIDTH,
             overflow="visible",
@@ -1281,21 +1261,9 @@ class ColabProSSTUI:
             layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
         )
         advanced_button = self._button("Show advanced settings")
-        freeze_backbone = widgets.Checkbox(
-            value=True,
-            description="Freeze ProSST backbone",
-            style={"description_width": "initial"},
-            layout=widgets.Layout(display="none"),
-        )
         gradient_checkpointing = widgets.Checkbox(
             value=True,
             description="Use gradient checkpointing",
-            style={"description_width": "initial"},
-            layout=widgets.Layout(display="none"),
-        )
-        save_training_state = widgets.Checkbox(
-            value=False,
-            description="Save optimizer state for future exact resume (larger file)",
             style={"description_width": "initial"},
             layout=widgets.Layout(display="none"),
         )
@@ -1331,49 +1299,25 @@ class ColabProSSTUI:
 
         def toggle_advanced(_button):
             show = advanced_button.description == "Show advanced settings"
-            mode = None if show else "none"
-            use_lora = training_method.value == "lora"
-            freeze_backbone.layout.display = "none" if use_lora else mode
-            gradient_checkpointing.layout.display = mode
-            save_training_state.layout.display = "none" if use_lora else mode
             advanced_button.description = (
                 "Hide advanced settings" if show else "Show advanced settings"
             )
+            update_training_controls()
 
         def update_training_controls(_change=None):
-            use_lora = training_method.value == "lora"
-            use_checkpoint = training_start.value == "checkpoint"
-            initial_checkpoint.set_visible(use_checkpoint)
-            resume_optimizer_state.layout.display = (
-                None if use_checkpoint and not use_lora else "none"
+            continue_adapter = training_start.value == "adapter"
+            initial_adapter.set_visible(continue_adapter)
+            adapter_help_widget.layout.display = (
+                None if continue_adapter else "none"
             )
-            checkpoint_help.layout.display = None if use_checkpoint else "none"
-            checkpoint_help.value = (
-                lora_checkpoint_help if use_lora else full_checkpoint_help
-            )
-            initial_checkpoint.set_local_copy(
-                "Initial adapter:" if use_lora else "Initial checkpoint:",
-                "Path to a LoRA adapter directory or ZIP"
-                if use_lora
-                else "Path to a compatible ColabProSST .pt checkpoint",
-            )
-            show_new_lora_config = use_lora and not use_checkpoint
+            advanced_visible = advanced_button.description == "Hide advanced settings"
+            show_new_lora_config = advanced_visible and not continue_adapter
             for item in [lora_rank, lora_alpha, lora_dropout]:
                 item.layout.display = None if show_new_lora_config else "none"
-            lora_help.layout.display = None if use_lora else "none"
-            if use_lora:
-                freeze_backbone.value = False
-                save_training_state.value = False
-                resume_optimizer_state.value = False
-            advanced_visible = advanced_button.description == "Hide advanced settings"
-            freeze_backbone.layout.display = (
-                None if advanced_visible and not use_lora else "none"
+            gradient_checkpointing.layout.display = (
+                None if advanced_visible else "none"
             )
-            save_training_state.layout.display = (
-                None if advanced_visible and not use_lora else "none"
-            )
-            if not use_checkpoint:
-                resume_optimizer_state.value = False
+            lora_help.layout.display = None if advanced_visible else "none"
 
         def apply_initial_artifact(metadata):
             self._apply_artifact_metadata(
@@ -1381,17 +1325,16 @@ class ColabProSSTUI:
                 task_type,
                 model,
                 num_labels,
-                training_method,
             )
-            training_start.value = "checkpoint"
+            training_start.value = "adapter"
 
         def train():
             if not csv_input.value:
                 raise ValueError("Upload a training CSV or enter its path.")
-            use_checkpoint = training_start.value == "checkpoint"
-            if use_checkpoint and not initial_checkpoint.value:
+            continue_adapter = training_start.value == "adapter"
+            if continue_adapter and not initial_adapter.value:
                 raise ValueError(
-                    "Upload an initial checkpoint or enter its path."
+                    "Upload an initial ColabProSST adapter or enter its path."
                 )
             clean_task_name = task_name.value.strip()
             if not clean_task_name or Path(clean_task_name).name != clean_task_name:
@@ -1404,14 +1347,9 @@ class ColabProSSTUI:
                 structure_vocab_size=model_spec.structure_vocab_size,
             )
             print("Start training...")
-            if use_checkpoint:
-                print("Selected checkpoint:", initial_checkpoint.value)
-                print(
-                    "Continuation mode:",
-                    "exact resume"
-                    if resume_optimizer_state.value
-                    else "weight-only fine-tuning",
-                )
+            if continue_adapter:
+                print("Continuing adapter:", initial_adapter.value)
+                print("Optimizer state: new optimizer")
             result = self.workflow.train_downstream(
                 task_type=task_type.value,
                 input_csv=csv_input.value,
@@ -1424,43 +1362,25 @@ class ColabProSSTUI:
                 learning_rate=learning_rate.value,
                 model_path=model.value,
                 structure_vocab_size=model_spec.structure_vocab_size,
-                freeze_backbone=freeze_backbone.value,
                 gradient_checkpointing=gradient_checkpointing.value,
-                initial_checkpoint=(
-                    initial_checkpoint.value if use_checkpoint else ""
+                initial_adapter=(
+                    initial_adapter.value if continue_adapter else ""
                 ),
-                resume_optimizer_state=(
-                    resume_optimizer_state.value if use_checkpoint else False
-                ),
-                save_training_state=save_training_state.value,
-                training_method=training_method.value,
                 lora_rank=lora_rank.value,
                 lora_alpha=lora_alpha.value,
                 lora_dropout=lora_dropout.value,
                 download=False,
             )
-            self.latest_checkpoint = result["checkpoint_path"]
+            self.latest_checkpoint = result["adapter_path"]
             self.latest_model_path = result["model_path"]
             self.latest_task_type = result["task_type"]
             self.latest_num_labels = num_labels.value
             print("Training finished.")
-            print("Model artifact:", result["checkpoint_path"])
-            print("Download artifact:", result["checkpoint_download_path"])
+            print("Adapter:", result["adapter_path"])
+            print("Adapter ZIP:", result["adapter_download_path"])
             print("Test predictions:", result["test_result_csv"])
-            if result["training_method"] == "full":
-                print(
-                    "Checkpoint training state:",
-                    "included"
-                    if result["save_training_state"]
-                    else "weights only",
-                )
-            artifact_label = (
-                "LoRA adapter ZIP"
-                if result["training_method"] == "lora"
-                else "model checkpoint"
-            )
             self._display_result_downloads(
-                (artifact_label, result["checkpoint_download_path"]),
+                ("LoRA adapter ZIP", result["adapter_download_path"]),
                 ("test predictions CSV", result["test_result_csv"]),
             )
             finish_hint.value = (
@@ -1470,7 +1390,7 @@ class ColabProSSTUI:
                 "settings, and start a new task.</li>"
                 "<li><b>Use this model for prediction:</b> click <b>Go back</b>, "
                 "choose <b>I want to use existing models to make prediction</b>, "
-                "then choose <b>Protein property prediction</b>. The checkpoint "
+                "then choose <b>Protein property prediction</b>. The adapter "
                 "is selected automatically in this session.</li>"
                 "<li><b>Share this model:</b> click <b>Go back</b> and choose "
                 "<b>I want to share my model publicly</b>.</li>"
@@ -1480,10 +1400,9 @@ class ColabProSSTUI:
 
         update_task({"new": task_type.value})
         task_type.observe(update_task, names="value")
-        initial_checkpoint.on_loaded(apply_initial_artifact)
+        initial_adapter.on_loaded(apply_initial_artifact)
         update_training_controls()
         training_start.observe(update_training_controls, names="value")
-        training_method.observe(update_training_controls, names="value")
         advanced_button.on_click(toggle_advanced)
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, train)
@@ -1498,15 +1417,10 @@ class ColabProSSTUI:
             task_intro,
             self._heading("Model setting:", level=3),
             model,
-            training_method,
-            lora_rank,
-            lora_alpha,
-            lora_dropout,
-            lora_help,
+            training_method_help,
             training_start,
-            *initial_checkpoint.items,
-            resume_optimizer_state,
-            checkpoint_help,
+            *initial_adapter.items,
+            adapter_help_widget,
             self._heading("Dataset setting:", level=3),
             dataset_help,
             *csv_input.items,
@@ -1516,9 +1430,11 @@ class ColabProSSTUI:
             epochs,
             learning_rate,
             advanced_button,
-            freeze_backbone,
+            lora_rank,
+            lora_alpha,
+            lora_dropout,
+            lora_help,
             gradient_checkpointing,
-            save_training_state,
             self._separator(),
             start_button,
             output,
@@ -1559,7 +1475,7 @@ class ColabProSSTUI:
             self._separator(),
             property_button,
             self._html(
-                "Use a trained ProSST checkpoint for protein-level "
+                "Use a trained ColabProSST adapter for protein-level "
                 "classification/regression, residue-level classification, or "
                 "protein-pair classification/regression."
             ),
@@ -1567,7 +1483,8 @@ class ColabProSSTUI:
             embedding_button,
             self._html(
                 "Extract final-layer protein-level vectors, residue-level "
-                "vectors, or both from an official ProSST model."
+                "vectors, or both from an official ProSST model or a trained "
+                "ColabProSST adapter."
             ),
             self._separator(),
             mutation_button,
@@ -1606,8 +1523,8 @@ class ColabProSSTUI:
         model = self._model_dropdown()
         checkpoint = _ModelArtifactField(
             self,
-            "Model or adapter:",
-            "Path to a .pt checkpoint, LoRA adapter directory, or LoRA ZIP",
+            "Fine-tuned adapter:",
+            "Path to a ColabProSST adapter directory or ZIP",
         )
         checkpoint.value = self.latest_checkpoint
         csv_input = _UploadField(
@@ -1645,7 +1562,7 @@ class ColabProSSTUI:
         def predict():
             if not checkpoint.value:
                 raise ValueError(
-                    "Upload a model checkpoint/adapter or enter its path."
+                    "Upload a ColabProSST adapter or enter its path."
                 )
             if not csv_input.value:
                 raise ValueError("Upload a prediction CSV or enter its path.")
@@ -1699,10 +1616,10 @@ class ColabProSSTUI:
             model,
             *checkpoint.items,
             self._html(
-                "Use a full ColabProSST <code>.pt</code> checkpoint, an "
-                "extracted LoRA adapter directory, or a downloaded LoRA "
-                "adapter ZIP. Select the checkpoint's original task and base "
-                "model."
+                "Use an extracted ColabProSST adapter directory, a downloaded "
+                "adapter ZIP, or a compatible ProSSTHub repository. The task "
+                "head is included in the adapter. Select the adapter's original "
+                "task and official ProSST base model."
             ),
             self._heading("Input proteins:", level=3),
             *csv_input.items,
@@ -1737,7 +1654,7 @@ class ColabProSSTUI:
         embedding_model_source = widgets.ToggleButtons(
             options=[
                 ("Official ProSST", "official"),
-                ("Fine-tuned / community artifact", "artifact"),
+                ("Fine-tuned / community adapter", "artifact"),
             ],
             value="official",
             description="Embedding model:",
@@ -1746,8 +1663,8 @@ class ColabProSSTUI:
         )
         embedding_artifact = _ModelArtifactField(
             self,
-            "Model or adapter:",
-            "Path to a .pt checkpoint, LoRA adapter directory, or LoRA ZIP",
+            "Fine-tuned adapter:",
+            "Path to a ColabProSST adapter directory or ZIP",
         )
         embedding_artifact.value = self.latest_checkpoint
         embedding_artifact.set_visible(False)
@@ -1804,7 +1721,7 @@ class ColabProSSTUI:
             use_artifact = embedding_model_source.value == "artifact"
             if use_artifact and not embedding_artifact.value:
                 raise ValueError(
-                    "Upload a fine-tuned model/adapter, enter its path, or load "
+                    "Upload a fine-tuned adapter, enter its path, or load "
                     "a Hugging Face repository."
                 )
             model_spec = get_prosst_model_spec(model.value)
@@ -2068,10 +1985,10 @@ class ColabProSSTUI:
             max_width=self.GUIDE_WIDTH,
             overflow="visible",
         )
-        checkpoint = _UploadField(
+        checkpoint = _ModelArtifactField(
             self,
-            "Model or adapter:",
-            "Path to a ColabProSST .pt, LoRA directory, or LoRA ZIP",
+            "ColabProSST adapter:",
+            "Path to a ColabProSST adapter directory or ZIP",
         )
         checkpoint.value = self.latest_checkpoint
         model = self._model_dropdown()
@@ -2095,7 +2012,7 @@ class ColabProSSTUI:
             layout=widgets.Layout(width=self.WIDTH, height=self.HEIGHT),
         )
         description = widgets.Textarea(
-            value="A ProSST checkpoint trained with ColabProSST.",
+            value="A ProSST adapter trained with ColabProSST.",
             description="Description:",
             style={"description_width": "initial"},
             layout=widgets.Layout(width=self.WIDTH, height="90px"),
@@ -2161,7 +2078,7 @@ class ColabProSSTUI:
         def upload():
             if not checkpoint.value:
                 raise ValueError(
-                    "Upload a model checkpoint/adapter or enter its path."
+                    "Upload a ColabProSST adapter or enter its path."
                 )
             clean_repo_name = repo_name.value.strip()
             if not clean_repo_name:
@@ -2196,6 +2113,14 @@ class ColabProSSTUI:
             contribution_hint.layout.display = None
 
         task_type.observe(update_task, names="value")
+        checkpoint.on_loaded(
+            lambda metadata: self._apply_artifact_metadata(
+                metadata,
+                task_type,
+                model,
+                num_labels,
+            )
+        )
         login_button.on_click(log_in)
         start_button.on_click(
             lambda _button: self._start_task(start_button, output, upload)

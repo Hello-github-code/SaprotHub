@@ -85,8 +85,8 @@ def load_prosst_downstream_model(
     adapter = Path(checkpoint_path)
     if not adapter.is_dir():
         raise ValueError(
-            "ColabProSST prediction requires a LoRA adapter directory, not a "
-            f"full model checkpoint: {adapter}"
+            "ColabProSST prediction requires an extracted LoRA adapter "
+            f"directory: {adapter}"
         )
     if not (adapter / "adapter_config.json").is_file():
         raise ValueError(

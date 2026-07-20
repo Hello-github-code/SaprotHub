@@ -573,7 +573,8 @@ class _StructureInput:
                 "<code>structure_file_2</code>, plus one ZIP containing those "
                 "PDB/mmCIF files. Optional <code>chain_1</code> and "
                 "<code>chain_2</code> columns select a chain. ColabProSST "
-                "generates both token sequences automatically."
+                "generates both token sequences automatically. Each ProSST "
+                "input supports up to 2046 residues."
             )
         elif mode == self.SEQUENCE:
             self.hint.value = (
@@ -588,7 +589,8 @@ class _StructureInput:
                 "<code>structure_file</code>, plus one ZIP containing the named "
                 "PDB/mmCIF files. Add an optional <code>chain</code> column when "
                 "a structure contains multiple chains. ColabProSST validates "
-                "the sequence and generates tokens for the selected model."
+                "the sequence and generates tokens for the selected model. "
+                "ProSST inputs support up to 2046 residues."
             )
 
 
@@ -879,7 +881,7 @@ class ColabProSSTUI:
             "generates the model-specific structure tokens automatically. This "
             "method is suitable when you already have experimental or predicted "
             "structures, including proteins longer than the automatic service's "
-            "limit.</li>"
+            "limit, up to the current ProSST input maximum of 2046 residues.</li>"
             "<li><b>Sequence only:</b> upload a CSV containing amino-acid "
             "sequences. ColabProSST predicts structures and generates tokens "
             "automatically. This uses the public ESMFold service, sends each "

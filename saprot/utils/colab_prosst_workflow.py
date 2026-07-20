@@ -22,6 +22,9 @@ from saprot.data.prosst_labels import (
 from saprot.data.sequence_to_prosst import (
     prepare_sequence_csv_with_structure_tokens,
 )
+from saprot.data.structure_to_prosst import (
+    prepare_structure_csv_with_structure_tokens,
+)
 from saprot.scripts.mutation_zeroshot_prosst import score_mutants
 from saprot.scripts.saturation_mutagenesis_prosst import (
     score_saturation_mutagenesis,
@@ -61,8 +64,9 @@ RESUMABLE_CHECKPOINT_KEYS = {
 }
 HF_REPO_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 INPUT_MODE_SEQUENCE = "sequence"
+INPUT_MODE_STRUCTURE = "structure"
 INPUT_MODE_TOKENS = "tokens"
-INPUT_MODES = {INPUT_MODE_SEQUENCE, INPUT_MODE_TOKENS}
+INPUT_MODES = {INPUT_MODE_SEQUENCE, INPUT_MODE_STRUCTURE, INPUT_MODE_TOKENS}
 
 
 class ColabProSSTWorkflow:
@@ -264,6 +268,10 @@ class ColabProSSTWorkflow:
         archive_path = Path(zip_path)
         if not archive_path.exists():
             raise FileNotFoundError(f"Structure asset zip does not exist: {archive_path}")
+        if not archive_path.is_file() or not zipfile.is_zipfile(archive_path):
+            raise ValueError(
+                f"Structure assets must be uploaded as a valid ZIP file: {archive_path}"
+            )
 
         target_dir = self.asset_dir / archive_path.stem
         shutil.rmtree(target_dir, ignore_errors=True)
@@ -889,6 +897,7 @@ class ColabProSSTWorkflow:
         structure_vocab_size: Optional[int] = None,
         input_mode: str = INPUT_MODE_TOKENS,
         pair_mode: bool = False,
+        structure_zip: str = "",
     ) -> tuple[str, Optional[str]]:
         input_csv = self.maybe_upload_path(input_csv, upload_csv)
         input_mode = str(input_mode).strip().lower()
@@ -898,6 +907,22 @@ class ColabProSSTWorkflow:
             output_path = self.output_dir / f"prosst_{suffix}_prepared.csv"
             prepared_csv = prepare_sequence_csv_with_structure_tokens(
                 input_csv=input_csv,
+                output_csv=str(output_path),
+                cache_dir=str(self.cache_dir),
+                structure_vocab_size=int(structure_vocab_size),
+                pair_mode=pair_mode,
+            )
+            return prepared_csv, prepared_csv
+        if input_mode == INPUT_MODE_STRUCTURE:
+            structure_dir = self.maybe_extract_asset_zip(structure_zip)
+            if structure_dir is None:
+                raise ValueError(
+                    "Sequence + structure files input requires a structure ZIP."
+                )
+            output_path = self.output_dir / f"prosst_{suffix}_prepared.csv"
+            prepared_csv = prepare_structure_csv_with_structure_tokens(
+                input_csv=input_csv,
+                structure_dir=structure_dir,
                 output_csv=str(output_path),
                 cache_dir=str(self.cache_dir),
                 structure_vocab_size=int(structure_vocab_size),
@@ -1075,6 +1100,7 @@ class ColabProSSTWorkflow:
         output_csv: Optional[str] = None,
         download: bool = True,
         input_mode: str = INPUT_MODE_TOKENS,
+        structure_zip: str = "",
     ) -> pd.DataFrame:
         structure_vocab_size = resolve_structure_vocab_size(
             model_path,
@@ -1086,6 +1112,7 @@ class ColabProSSTWorkflow:
             "mutation",
             structure_vocab_size,
             input_mode=input_mode,
+            structure_zip=structure_zip,
         )
         output_path = Path(output_csv) if output_csv else self.output_dir / "prosst_mutation_scores.csv"
 
@@ -1115,6 +1142,7 @@ class ColabProSSTWorkflow:
         output_heatmap_png: Optional[str] = None,
         download: bool = True,
         input_mode: str = INPUT_MODE_TOKENS,
+        structure_zip: str = "",
     ) -> dict:
         structure_vocab_size = resolve_structure_vocab_size(
             model_path,
@@ -1126,6 +1154,7 @@ class ColabProSSTWorkflow:
             "saturation",
             structure_vocab_size,
             input_mode=input_mode,
+            structure_zip=structure_zip,
         )
         score_path = (
             Path(output_csv)
@@ -1186,6 +1215,7 @@ class ColabProSSTWorkflow:
         checkpoint_path: str = "",
         download: bool = True,
         input_mode: str = INPUT_MODE_TOKENS,
+        structure_zip: str = "",
     ) -> dict:
         level = str(level).strip().lower()
         if level not in EMBEDDING_LEVELS:
@@ -1220,6 +1250,7 @@ class ColabProSSTWorkflow:
             "embedding",
             structure_vocab_size,
             input_mode=input_mode,
+            structure_zip=structure_zip,
         )
 
         embedding_path = (
@@ -1296,6 +1327,7 @@ class ColabProSSTWorkflow:
         learning_rate: float = 2.0e-5,
         download: bool = True,
         input_mode: str = INPUT_MODE_TOKENS,
+        structure_zip: str = "",
     ) -> dict:
         if task_type not in SUPPORTED_TASK_TYPES:
             raise ValueError(f"Unsupported ProSST task_type: {task_type}.")
@@ -1364,6 +1396,7 @@ class ColabProSSTWorkflow:
             structure_vocab_size,
             input_mode=input_mode,
             pair_mode=task_type in PAIR_TASK_TYPES,
+            structure_zip=structure_zip,
         )
         self._validate_training_labels(input_csv, task_type, num_labels)
 
@@ -1555,6 +1588,7 @@ class ColabProSSTWorkflow:
         output_csv: Optional[str] = None,
         download: bool = True,
         input_mode: str = INPUT_MODE_TOKENS,
+        structure_zip: str = "",
     ) -> pd.DataFrame:
         if task_type not in SUPPORTED_TASK_TYPES:
             raise ValueError(f"Unsupported ProSST task_type: {task_type}.")
@@ -1573,6 +1607,7 @@ class ColabProSSTWorkflow:
             structure_vocab_size,
             input_mode=input_mode,
             pair_mode=task_type in PAIR_TASK_TYPES,
+            structure_zip=structure_zip,
         )
         output_path = Path(output_csv) if output_csv else self.output_dir / f"prosst_{task_type}_predictions.csv"
 

@@ -1315,7 +1315,6 @@ class ColabProSSTWorkflow:
             "config_path": model_path,
             "structure_vocab_size": structure_vocab_size,
             "load_pretrained": True,
-            "freeze_backbone": False,
             "gradient_checkpointing": gradient_checkpointing,
             "save_path": str(adapter_path),
             "save_weights_only": True,
@@ -1419,7 +1418,6 @@ class ColabProSSTWorkflow:
             "model_path": model_path,
             "structure_vocab_size": structure_vocab_size,
             "initial_adapter": initial_adapter,
-            "training_method": "lora",
             "prepared_input_csv": prepared_input_csv,
         }
 

@@ -25,7 +25,11 @@ class ESMFoldPredictionError(RuntimeError):
     """Raised when automatic sequence-to-structure prediction fails."""
 
 
-def normalize_protein_sequence(value, context: str = "sequence") -> str:
+def normalize_protein_sequence(
+    value,
+    context: str = "sequence",
+    max_residues: Optional[int] = ESMFOLD_MAX_RESIDUES,
+) -> str:
     sequence = "".join(str(value).split()).upper()
     if not sequence:
         raise ValueError(f"{context} is empty.")
@@ -36,11 +40,11 @@ def normalize_protein_sequence(value, context: str = "sequence") -> str:
             "Automatic structure prediction accepts the 20 standard amino "
             "acids and X."
         )
-    if len(sequence) > ESMFOLD_MAX_RESIDUES:
+    if max_residues is not None and len(sequence) > int(max_residues):
         raise ValueError(
             f"{context} has {len(sequence)} residues, but the automatic "
-            f"ESMFold service accepts at most {ESMFOLD_MAX_RESIDUES}. Prepare "
-            "a structure-token CSV separately for longer proteins."
+            f"ESMFold service accepts at most {int(max_residues)}. Use the "
+            "sequence + structure files input method for longer proteins."
         )
     return sequence
 

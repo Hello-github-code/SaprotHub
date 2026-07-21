@@ -1383,6 +1383,7 @@ class ColabProSSTUI:
             self._display_result_downloads(
                 ("LoRA adapter ZIP", result["adapter_download_path"]),
                 ("test predictions CSV", result["test_result_csv"]),
+                ("prepared input CSV", result.get("prepared_input_csv")),
             )
             finish_hint.value = (
                 "<h3>The training is completed. You can then:</h3>"
@@ -1591,6 +1592,7 @@ class ColabProSSTUI:
             self.display(result.head())
             self._display_result_downloads(
                 ("predictions CSV", result.attrs.get("output_csv")),
+                ("prepared input CSV", result.attrs.get("prepared_input_csv")),
             )
 
         adapter.on_loaded(
@@ -1762,6 +1764,7 @@ class ColabProSSTUI:
                 ("embedding ZIP", result["archive_path"]),
                 ("embeddings PT", result["output_pt"]),
                 ("embedding index CSV", result["output_index_csv"]),
+                ("prepared input CSV", result.get("prepared_input_csv")),
             )
             completion.value = (
                 "<b>Embedding extraction completed.</b><br>"
@@ -1842,6 +1845,7 @@ class ColabProSSTUI:
                 ("mutation scores CSV", result["output_csv"]),
                 ("score matrix CSV", result["output_matrix_csv"]),
                 ("heatmap PNG", result["output_heatmap_png"]),
+                ("prepared input CSV", result.get("prepared_input_csv")),
             )
 
         start_button.on_click(
@@ -1901,6 +1905,7 @@ class ColabProSSTUI:
             self.display(result.head())
             self._display_result_downloads(
                 ("mutation scores CSV", result.attrs.get("output_csv")),
+                ("prepared input CSV", result.attrs.get("prepared_input_csv")),
             )
 
         start_button.on_click(

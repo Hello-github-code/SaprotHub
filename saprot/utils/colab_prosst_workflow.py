@@ -52,6 +52,10 @@ from saprot.utils.prosst_module_loader import (
     my_load_dataset,
     my_load_model,
 )
+from saprot.utils.colab_prosst_templates import (
+    INPUT_TEMPLATE_GUIDE,
+    get_input_template_name,
+)
 
 
 HF_REPO_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
@@ -447,6 +451,21 @@ class ColabProSSTWorkflow:
         template_home.mkdir(parents=True, exist_ok=True)
         for old_template in template_home.glob("prosst_*_template.csv"):
             old_template.unlink()
+        for old_name in [
+            "README.txt",
+            "00_README_FIRST.txt",
+            "prosst_input_templates.zip",
+        ]:
+            old_path = template_home / old_name
+            if old_path.is_file():
+                old_path.unlink()
+
+        def template_path(group, task, input_mode):
+            return template_home / get_input_template_name(
+                group,
+                task,
+                input_mode,
+            )
 
         pd.DataFrame(
             [
@@ -462,7 +481,7 @@ class ColabProSSTWorkflow:
                 },
             ]
         ).to_csv(
-            template_home / "prosst_zero_shot_structure_template.csv", index=False
+            template_path("zero_shot", "single", "structure"), index=False
         )
 
         pd.DataFrame(
@@ -473,7 +492,7 @@ class ColabProSSTWorkflow:
                 }
             ]
         ).to_csv(
-            template_home / "prosst_zero_shot_sequence_template.csv", index=False
+            template_path("zero_shot", "single", "sequence"), index=False
         )
 
         pd.DataFrame(
@@ -498,7 +517,7 @@ class ColabProSSTWorkflow:
                 },
             ]
         ).to_csv(
-            template_home / "prosst_classification_structure_template.csv",
+            template_path("training", "classification", "structure"),
             index=False,
         )
 
@@ -521,7 +540,7 @@ class ColabProSSTWorkflow:
                 },
             ]
         ).to_csv(
-            template_home / "prosst_classification_sequence_template.csv",
+            template_path("training", "classification", "sequence"),
             index=False,
         )
 
@@ -547,7 +566,7 @@ class ColabProSSTWorkflow:
                 },
             ]
         ).to_csv(
-            template_home / "prosst_token_classification_structure_template.csv",
+            template_path("training", "token_classification", "structure"),
             index=False,
         )
 
@@ -570,7 +589,7 @@ class ColabProSSTWorkflow:
                 },
             ]
         ).to_csv(
-            template_home / "prosst_token_classification_sequence_template.csv",
+            template_path("training", "token_classification", "sequence"),
             index=False,
         )
 
@@ -596,7 +615,7 @@ class ColabProSSTWorkflow:
                 },
             ]
         ).to_csv(
-            template_home / "prosst_regression_structure_template.csv", index=False
+            template_path("training", "regression", "structure"), index=False
         )
 
         pd.DataFrame(
@@ -618,7 +637,7 @@ class ColabProSSTWorkflow:
                 },
             ]
         ).to_csv(
-            template_home / "prosst_regression_sequence_template.csv", index=False
+            template_path("training", "regression", "sequence"), index=False
         )
 
         pair_examples = [
@@ -668,11 +687,11 @@ class ColabProSSTWorkflow:
                 sequence_rows.append(common)
 
             pd.DataFrame(token_rows).to_csv(
-                template_home / f"prosst_{task_type}_structure_template.csv",
+                template_path("training", task_type, "structure"),
                 index=False,
             )
             pd.DataFrame(sequence_rows).to_csv(
-                template_home / f"prosst_{task_type}_sequence_template.csv",
+                template_path("training", task_type, "sequence"),
                 index=False,
             )
 
@@ -688,26 +707,26 @@ class ColabProSSTWorkflow:
                 },
             ]
         )
-        for template_name in ["prediction", "embedding"]:
+        for group in ["prediction", "embedding"]:
             single_input_structures.to_csv(
-                template_home / f"prosst_{template_name}_structure_template.csv",
+                template_path(group, "single", "structure"),
                 index=False,
             )
         single_input_structures.iloc[[0]].to_csv(
-            template_home / "prosst_saturation_structure_template.csv",
+            template_path("saturation", "single", "structure"),
             index=False,
         )
 
         single_input_sequences = pd.DataFrame(
             [{"sequence": "ACD"}, {"sequence": "ACE"}]
         )
-        for template_name in ["prediction", "embedding"]:
+        for group in ["prediction", "embedding"]:
             single_input_sequences.to_csv(
-                template_home / f"prosst_{template_name}_sequence_template.csv",
+                template_path(group, "single", "sequence"),
                 index=False,
             )
         single_input_sequences.iloc[[0]].to_csv(
-            template_home / "prosst_saturation_sequence_template.csv",
+            template_path("saturation", "single", "sequence"),
             index=False,
         )
 
@@ -722,7 +741,7 @@ class ColabProSSTWorkflow:
                 for example in pair_examples[:2]
             ]
         ).to_csv(
-            template_home / "prosst_pair_prediction_structure_template.csv",
+            template_path("prediction", "pair", "structure"),
             index=False,
         )
         pd.DataFrame(
@@ -734,21 +753,42 @@ class ColabProSSTWorkflow:
                 for example in pair_examples[:2]
             ]
         ).to_csv(
-            template_home / "prosst_pair_prediction_sequence_template.csv",
+            template_path("prediction", "pair", "sequence"),
             index=False,
         )
 
-        instructions_path = template_home / "README.txt"
-        instructions_path.write_text(
+        instructions_path = template_home / "00_README_FIRST.txt"
+        instructions = [
             "ColabProSST input templates\n\n"
-            "Choose exactly one input method in the interface:\n"
-            "1. Sequence only: use a *_sequence_template.csv file.\n"
-            "2. Sequence + structure files: use a *_structure_template.csv "
-            "file, replace the example filenames, and upload the referenced "
-            "PDB/mmCIF files together as one Structure ZIP.\n\n"
-            "For protein-pair tasks, provide sequence_1, sequence_2, "
-            "structure_file_1, and structure_file_2. Optional chain, chain_1, "
-            "and chain_2 columns can select a chain from a structure file.\n",
+            "IMPORTANT: first choose the task in ColabProSST, then use the "
+            "matching template below. Do not use a protein-pair template for "
+            "a single-protein task, or a training template for prediction.\n\n"
+        ]
+        for section, entries in INPUT_TEMPLATE_GUIDE:
+            instructions.append(f"{section}\n")
+            for group, task, label in entries:
+                instructions.extend(
+                    [
+                        f"{label}:\n",
+                        "  "
+                        f"{get_input_template_name(group, task, 'sequence')}\n",
+                        "  "
+                        f"{get_input_template_name(group, task, 'structure')}\n",
+                    ]
+                )
+            instructions.append("\n")
+        instructions.append(
+            "For each task, choose exactly one input method:\n"
+            "1. Sequence only: use the filename containing _sequence_.\n"
+            "2. Sequence + structure files: use the filename containing "
+            "_structure_, replace its example structure filenames, and upload "
+            "the referenced PDB/mmCIF files together as one Structure ZIP.\n\n"
+            "Protein-pair files use sequence_1 and sequence_2. Their structure "
+            "input also uses structure_file_1 and structure_file_2. Optional "
+            "chain, chain_1, and chain_2 columns select chains.\n"
+        )
+        instructions_path.write_text(
+            "".join(instructions),
             encoding="utf-8",
         )
         template_zip = template_home / "prosst_input_templates.zip"

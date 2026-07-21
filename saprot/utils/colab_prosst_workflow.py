@@ -10,10 +10,6 @@ import pandas as pd
 import torch
 from easydict import EasyDict
 
-from saprot.data.pdb2prosst import (
-    load_or_quantize_structure,
-    serialize_structure_tokens,
-)
 from saprot.data.prosst_labels import (
     RESIDUE_LABEL_IGNORE_INDEX,
     parse_residue_labels,
@@ -61,8 +57,7 @@ from saprot.utils.colab_prosst_templates import (
 HF_REPO_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 INPUT_MODE_SEQUENCE = "sequence"
 INPUT_MODE_STRUCTURE = "structure"
-INPUT_MODE_TOKENS = "tokens"
-INPUT_MODES = {INPUT_MODE_SEQUENCE, INPUT_MODE_STRUCTURE, INPUT_MODE_TOKENS}
+INPUT_MODES = {INPUT_MODE_SEQUENCE, INPUT_MODE_STRUCTURE}
 
 
 class ColabProSSTWorkflow:
@@ -804,95 +799,13 @@ class ColabProSSTWorkflow:
 
         return template_zip
 
-    def prepare_sequence_input_csv(
-        self,
-        input_csv: str,
-        upload_csv: bool = False,
-        structure_vocab_size: int = 2048,
-        output_csv: Optional[str] = None,
-        download: bool = True,
-    ) -> pd.DataFrame:
-        input_csv = self.maybe_upload_path(input_csv, upload_csv)
-        columns = {
-            str(column).strip().lower()
-            for column in pd.read_csv(input_csv, nrows=0).columns
-        }
-        pair_columns = {"sequence_1", "sequence_2"}
-        if columns.intersection(pair_columns) and not pair_columns.issubset(columns):
-            raise ValueError(
-                "Protein-pair preparation requires both sequence_1 and sequence_2."
-            )
-        pair_mode = pair_columns.issubset(columns)
-        if not pair_mode and "sequence" not in columns and "protein" not in columns:
-            raise ValueError(
-                "Sequence preparation requires a sequence column, or both "
-                "sequence_1 and sequence_2 for protein pairs."
-            )
-
-        output_path = (
-            Path(output_csv)
-            if output_csv
-            else self.output_dir / "prosst_prepared_input.csv"
-        )
-        prepared_csv = prepare_sequence_csv_with_structure_tokens(
-            input_csv=input_csv,
-            output_csv=str(output_path),
-            cache_dir=str(self.cache_dir),
-            structure_vocab_size=int(structure_vocab_size),
-            pair_mode=pair_mode,
-        )
-        result = pd.read_csv(prepared_csv)
-        result.attrs["output_csv"] = prepared_csv
-        if download:
-            self._download(Path(prepared_csv))
-        return result
-
-    def convert_structure(
-        self,
-        structure_path: str,
-        upload_structure: bool = False,
-        chain_id: str = "",
-        structure_vocab_size: int = 2048,
-        output_csv: Optional[str] = None,
-        download: bool = True,
-    ) -> pd.DataFrame:
-        structure_path = self.maybe_upload_path(structure_path, upload_structure)
-        chain = chain_id.strip() or None
-        result = load_or_quantize_structure(
-            structure_path,
-            cache_dir=str(self.cache_dir),
-            chain_id=chain,
-            structure_vocab_size=structure_vocab_size,
-        )
-        output_path = Path(output_csv) if output_csv else self.output_dir / "prosst_structure_tokens.csv"
-        df = pd.DataFrame(
-            [
-                {
-                    "sequence": result["sequence"],
-                    "structure_tokens": serialize_structure_tokens(result["structure_tokens"]),
-                    "structure_vocab_size": int(result["structure_vocab_size"]),
-                }
-            ]
-        )
-        df.to_csv(output_path, index=False)
-        df.attrs["output_csv"] = str(output_path)
-
-        print("sequence length:", len(result["sequence"]))
-        print("structure token length:", len(result["structure_tokens"]))
-        print("first 20 tokens:", result["structure_tokens"][:20])
-        print("saved structure token csv:", output_path)
-        if download:
-            self._download(output_path)
-
-        return df
-
     def _prepare_input_csv(
         self,
         input_csv: str,
         upload_csv: bool,
         suffix: str,
         structure_vocab_size: Optional[int] = None,
-        input_mode: str = INPUT_MODE_TOKENS,
+        input_mode: str = INPUT_MODE_SEQUENCE,
         pair_mode: bool = False,
         structure_zip: str = "",
     ) -> str:
@@ -926,7 +839,7 @@ class ColabProSSTWorkflow:
                 pair_mode=pair_mode,
             )
             return prepared_csv
-        return input_csv
+        raise AssertionError(f"Unhandled input mode: {input_mode}")
 
     @staticmethod
     def _validate_category_ids(labels, num_labels: int, task_name: str) -> None:
@@ -1055,7 +968,7 @@ class ColabProSSTWorkflow:
         structure_vocab_size: Optional[int] = None,
         output_csv: Optional[str] = None,
         download: bool = True,
-        input_mode: str = INPUT_MODE_TOKENS,
+        input_mode: str = INPUT_MODE_SEQUENCE,
         structure_zip: str = "",
     ) -> pd.DataFrame:
         structure_vocab_size = resolve_structure_vocab_size(
@@ -1096,7 +1009,7 @@ class ColabProSSTWorkflow:
         output_matrix_csv: Optional[str] = None,
         output_heatmap_png: Optional[str] = None,
         download: bool = True,
-        input_mode: str = INPUT_MODE_TOKENS,
+        input_mode: str = INPUT_MODE_SEQUENCE,
         structure_zip: str = "",
     ) -> dict:
         structure_vocab_size = resolve_structure_vocab_size(
@@ -1168,7 +1081,7 @@ class ColabProSSTWorkflow:
         output_index_csv: Optional[str] = None,
         adapter_path: str = "",
         download: bool = True,
-        input_mode: str = INPUT_MODE_TOKENS,
+        input_mode: str = INPUT_MODE_SEQUENCE,
         structure_zip: str = "",
     ) -> dict:
         level = str(level).strip().lower()
@@ -1274,7 +1187,7 @@ class ColabProSSTWorkflow:
         lora_dropout: float = 0.05,
         learning_rate: float = 2.0e-5,
         download: bool = True,
-        input_mode: str = INPUT_MODE_TOKENS,
+        input_mode: str = INPUT_MODE_SEQUENCE,
         structure_zip: str = "",
     ) -> dict:
         if task_type not in SUPPORTED_TASK_TYPES:
@@ -1474,7 +1387,7 @@ class ColabProSSTWorkflow:
         structure_vocab_size: Optional[int] = None,
         output_csv: Optional[str] = None,
         download: bool = True,
-        input_mode: str = INPUT_MODE_TOKENS,
+        input_mode: str = INPUT_MODE_SEQUENCE,
         structure_zip: str = "",
     ) -> pd.DataFrame:
         if task_type not in SUPPORTED_TASK_TYPES:

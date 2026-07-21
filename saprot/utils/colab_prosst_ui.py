@@ -21,6 +21,7 @@ from saprot.model.prosst.specs import (
     PROSST_HUB_URL,
     get_prosst_model_spec,
 )
+from saprot.utils.colab_prosst_templates import get_input_template_name
 
 
 COLAB_ENVIRONMENT_GENERATION = "2026-07-12-clean-kernel-v2"
@@ -408,6 +409,11 @@ class _StructureInput:
     def __init__(self, ui):
         self.ui = ui
         self.pair_mode = False
+        self.template_group = None
+        self.template_task = None
+        self.task_label = "this task"
+        self.required_columns = set()
+        self.exact_rows = None
         widgets = ui.widgets
         self.mode = widgets.RadioButtons(
             options=self._mode_options(),
@@ -463,6 +469,41 @@ class _StructureInput:
         self.mode.observe(self._update, names="value")
         self._update({"new": self.mode.value})
 
+    def set_context(
+        self,
+        template_group,
+        template_task,
+        task_label,
+        required_columns=(),
+        exact_rows=None,
+    ):
+        self.template_group = template_group
+        self.template_task = template_task
+        self.task_label = task_label
+        self.required_columns = {
+            str(column).strip().lower() for column in required_columns
+        }
+        self.exact_rows = exact_rows
+        self._update({"new": self.mode.value})
+
+    def _template_name(self, mode=None):
+        if not self.template_group or not self.template_task:
+            return ""
+        return get_input_template_name(
+            self.template_group,
+            self.template_task,
+            mode or self.mode.value,
+        )
+
+    def _expected_template_message(self):
+        template_name = self._template_name()
+        if not template_name:
+            return ""
+        return (
+            f" Use `{template_name}` from the home-page Input templates for "
+            "this task and input method."
+        )
+
     def _mode_options(self):
         return [
             ("Sequence + structure files", self.STRUCTURE),
@@ -512,9 +553,39 @@ class _StructureInput:
         )
         missing_sequences = sorted(set(sequence_columns) - columns)
         if missing_sequences:
+            uploaded_shape = ""
+            if self.pair_mode and "sequence" in columns:
+                uploaded_shape = (
+                    " The uploaded file looks like a single-protein template, "
+                    "but the selected task is a protein-pair task."
+                )
+            elif not self.pair_mode and {
+                "sequence_1",
+                "sequence_2",
+            }.issubset(columns):
+                uploaded_shape = (
+                    " The uploaded file looks like a protein-pair template, "
+                    "but the selected task is a single-protein task."
+                )
             raise ValueError(
-                "The uploaded CSV is missing required sequence column(s): "
-                f"{missing_sequences}."
+                f"{self.task_label} is missing required sequence column(s): "
+                f"{missing_sequences}.{uploaded_shape}"
+                f"{self._expected_template_message()}"
+            )
+
+        missing_task_columns = sorted(self.required_columns - columns)
+        if missing_task_columns:
+            raise ValueError(
+                f"{self.task_label} requires CSV column(s) "
+                f"{missing_task_columns}, but they are missing."
+                f"{self._expected_template_message()}"
+            )
+
+        if self.exact_rows is not None and len(rows) != int(self.exact_rows):
+            raise ValueError(
+                f"{self.task_label} requires exactly {self.exact_rows} CSV "
+                f"row(s), but the uploaded file contains {len(rows)}."
+                f"{self._expected_template_message()}"
             )
 
         for row_number, row in enumerate(rows, start=2):
@@ -536,13 +607,14 @@ class _StructureInput:
                 raise ValueError(
                     "Protein-pair structure input requires both "
                     "structure_file_1 and structure_file_2. Missing: "
-                    f"{missing}."
+                    f"{missing}.{self._expected_template_message()}"
                 )
         elif self.mode.value == self.STRUCTURE and "structure_file" not in columns:
             raise ValueError(
                 "You selected `Sequence + structure files`, but the uploaded "
                 "CSV has no structure_file column. Add the structure filenames "
                 "to the CSV or choose the sequence-only input method."
+                f"{self._expected_template_message()}"
             )
         if self.mode.value == self.STRUCTURE:
             if not self.structure_zip:
@@ -559,6 +631,19 @@ class _StructureInput:
     def _update(self, change):
         mode = change["new"]
         self.structure_archive.set_visible(mode == self.STRUCTURE)
+        if self.template_group and self.template_task:
+            sequence_template = self._template_name(self.SEQUENCE)
+            structure_template = self._template_name(self.STRUCTURE)
+            selected_template = self._template_name(mode)
+            self.home_help.value = (
+                f"<b>Templates for {self.task_label}:</b><br>"
+                f"Sequence only: <code>{sequence_template}</code><br>"
+                "Sequence + structure files: "
+                f"<code>{structure_template}</code><br>"
+                f"Current selection: <b><code>{selected_template}</code></b>. "
+                "Download these files from <b>Input templates</b> on the "
+                "ColabProSST home page."
+            )
         if self.pair_mode and mode == self.SEQUENCE:
             self.hint.value = (
                 "Upload a CSV with <code>sequence_1</code> and "
@@ -764,6 +849,16 @@ class ColabProSSTUI:
         )
 
     @staticmethod
+    def _task_label(task_type):
+        return {
+            "classification": "Protein-level Classification",
+            "regression": "Protein-level Regression",
+            "token_classification": "Residue-level Classification",
+            "pair_classification": "Protein-pair Classification",
+            "pair_regression": "Protein-pair Regression",
+        }[task_type]
+
+    @staticmethod
     def _task_intro(task_type):
         if task_type == "classification":
             return (
@@ -822,8 +917,8 @@ class ColabProSSTUI:
             return (
                 "The CSV must contain <code>sequence_1</code>, "
                 "<code>sequence_2</code>, <code>label</code>, and "
-                "<code>stage</code>. ColabProSST can prepare both structures "
-                "automatically, or use tokens already stored in the CSV."
+                "<code>stage</code>. Then choose one of the two input methods "
+                "below."
             )
         return (
             "The CSV must contain <code>sequence</code>, <code>label</code>, "
@@ -1288,6 +1383,17 @@ class ColabProSSTUI:
             task_intro.value = self._task_intro(selected_task)
             dataset_help.value = self._training_dataset_help(selected_task)
             structure_input.set_pair_mode(self._is_pair_task(selected_task))
+            required_columns = (
+                {"residue_labels", "stage"}
+                if selected_task == "token_classification"
+                else {"label", "stage"}
+            )
+            structure_input.set_context(
+                "training",
+                selected_task,
+                f"{self._task_label(selected_task)} training",
+                required_columns=required_columns,
+            )
             if selected_task == "token_classification":
                 placeholder = (
                     "CSV with sequence, residue_labels, and stage"
@@ -1556,6 +1662,11 @@ class ColabProSSTUI:
             task_intro.value = self._task_intro(selected_task)
             prediction_help.value = self._prediction_output_help(selected_task)
             structure_input.set_pair_mode(self._is_pair_task(selected_task))
+            structure_input.set_context(
+                "prediction",
+                "pair" if self._is_pair_task(selected_task) else "single",
+                f"{self._task_label(selected_task)} prediction",
+            )
             csv_input.path.placeholder = (
                 "CSV with sequence_1 and sequence_2"
                 if self._is_pair_task(selected_task)
@@ -1677,6 +1788,11 @@ class ColabProSSTUI:
             "CSV with sequence",
         )
         structure_input = _StructureInput(self)
+        structure_input.set_context(
+            "embedding",
+            "single",
+            "Embedding extraction",
+        )
         batch_size = widgets.Dropdown(
             options=[1, 2, 4, 8, 16, 32],
             value=1,
@@ -1811,6 +1927,12 @@ class ColabProSSTUI:
             "One-row CSV with sequence",
         )
         structure_input = _StructureInput(self)
+        structure_input.set_context(
+            "saturation",
+            "single",
+            "Single-site saturation mutagenesis",
+            exact_rows=1,
+        )
         start_button = self._button(
             "Start saturation mutagenesis",
             style="info",
@@ -1879,6 +2001,12 @@ class ColabProSSTUI:
             "CSV with sequence and mutant",
         )
         structure_input = _StructureInput(self)
+        structure_input.set_context(
+            "zero_shot",
+            "single",
+            "Mutational effect prediction",
+            required_columns={"mutant"},
+        )
         start_button = self._button("Start prediction", style="info")
         output = self._output()
 

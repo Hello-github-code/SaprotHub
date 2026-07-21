@@ -432,8 +432,8 @@ class _StructureInput:
             value=(
                 "<b>Need more guidance or an example?</b> Return to the "
                 "ColabProSST home page for the complete input instructions. "
-                "Choose your ProSST model there and click "
-                "<b>Download CSV templates</b> for ready-to-use examples."
+                "Click <b>Download input templates</b> there for ready-to-use "
+                "examples covering every supported task and input method."
             ),
             layout=widgets.Layout(
                 width="100%",
@@ -884,11 +884,12 @@ class ColabProSSTUI:
             "residues per sequence.</li>"
             "</ol>"
             "<hr style='border:0;border-top:1px solid #dadce0;margin:18px 0 12px'>"
-            "<h3 style='margin:0 0 8px'>CSV templates</h3>"
-            "<p><b>Start here:</b> choose your intended ProSST model below, "
-            "then download ready-to-use examples for every supported task. "
-            "The package contains separate sequence-only and sequence + "
-            "structure-file examples for every supported task.</p>",
+            "<h3 style='margin:0 0 8px'>Input templates</h3>"
+            "<p><b>Start here:</b> download ready-to-use input examples for "
+            "every supported task. The package contains separate sequence-only "
+            "and sequence + structure-file examples. These input formats work "
+            "with every official ProSST model; no model selection is required "
+            "before downloading.</p>",
             width="100%",
             max_width=self.GUIDE_WIDTH,
             overflow="visible",
@@ -1091,11 +1092,11 @@ class ColabProSSTUI:
             with self.system_status:
                 print("Task interrupted by user.")
 
-    def _download_templates(self, button):
+    def _download_input_templates(self, button):
         output = self.system_status
 
         def action():
-            self.workflow.create_csv_templates(download=True)
+            self.workflow.create_input_templates(download=True)
 
         self._start_task(button, output, action)
 
@@ -1105,8 +1106,8 @@ class ColabProSSTUI:
             "Please choose what you want to do with ColabProSST"
         )
         input_guide = self._input_guide()
-        template_button = self._button(
-            "Download CSV templates", width="280px", style="info"
+        input_template_button = self._button(
+            "Download input templates", width="280px", style="info"
         )
         train_button = self._button(
             "I want to train my own model", width="400px"
@@ -1123,8 +1124,8 @@ class ColabProSSTUI:
             lambda _button: self._navigate(self._prediction_menu_page)
         )
         share_button.on_click(lambda _button: self._navigate(self._share_page))
-        template_button.on_click(
-            lambda button: self._download_templates(button)
+        input_template_button.on_click(
+            lambda button: self._download_input_templates(button)
         )
 
         self._display_page(
@@ -1134,7 +1135,7 @@ class ColabProSSTUI:
             share_button,
             self._separator(),
             input_guide,
-            template_button,
+            input_template_button,
         )
 
     def _training_page(self):

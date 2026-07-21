@@ -438,11 +438,10 @@ class ColabProSSTWorkflow:
         )
         return result
 
-    def create_csv_templates(
+    def create_input_templates(
         self,
-        template_dir: str = "/content/prosst_templates",
+        template_dir: str = "/content/prosst_input_templates",
         download: bool = False,
-        structure_vocab_size: int = 2048,
     ) -> Path:
         template_home = Path(template_dir)
         template_home.mkdir(parents=True, exist_ok=True)
@@ -752,14 +751,14 @@ class ColabProSSTWorkflow:
             "and chain_2 columns can select a chain from a structure file.\n",
             encoding="utf-8",
         )
-        template_zip = template_home / "prosst_csv_templates.zip"
+        template_zip = template_home / "prosst_input_templates.zip"
         with zipfile.ZipFile(template_zip, "w") as archive:
             for csv_path in sorted(template_home.glob("*.csv")):
                 archive.write(csv_path, arcname=csv_path.name)
             archive.write(instructions_path, arcname=instructions_path.name)
 
-        print("template directory:", template_home)
-        print("template zip:", template_zip)
+        print("input template directory:", template_home)
+        print("input template package:", template_zip)
         if download:
             self._download(template_zip)
 

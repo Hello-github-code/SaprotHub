@@ -211,5 +211,5 @@ def prepare_sequence_csv_with_structure_tokens(
     output_path = Path(output_csv)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_path, index=False)
-    print("saved prepared structure-token CSV:", output_path)
+    print("Structure tokens are ready for this task.")
     return str(output_path)

@@ -562,9 +562,10 @@ class _StructureInput:
         if self.pair_mode and mode == self.SEQUENCE:
             self.hint.value = (
                 "Upload a CSV with <code>sequence_1</code> and "
-                "<code>sequence_2</code>. ColabProSST predicts both structures "
-                "and generates matching tokens automatically. Each sequence "
-                f"must be at most {ESMFOLD_MAX_RESIDUES} residues."
+                "<code>sequence_2</code>. Only these sequence columns are used; "
+                "structure-token columns are not required. ColabProSST predicts "
+                "both structures and generates matching tokens automatically. "
+                f"Each sequence must be at most {ESMFOLD_MAX_RESIDUES} residues."
             )
         elif self.pair_mode and mode == self.STRUCTURE:
             self.hint.value = (
@@ -578,10 +579,11 @@ class _StructureInput:
             )
         elif mode == self.SEQUENCE:
             self.hint.value = (
-                "Upload a CSV with <code>sequence</code>. ColabProSST predicts "
-                "each structure and generates tokens for the selected model "
-                f"automatically. Sequences must be at most {ESMFOLD_MAX_RESIDUES} "
-                "residues. The prepared CSV can be downloaded after the task."
+                "Upload a CSV with <code>sequence</code>. Only this sequence "
+                "column is used; <code>structure_tokens</code> is not required. "
+                "ColabProSST predicts each structure and generates tokens for "
+                "the selected model automatically. Sequences must be at most "
+                f"{ESMFOLD_MAX_RESIDUES} residues."
             )
         else:
             self.hint.value = (
@@ -1383,7 +1385,6 @@ class ColabProSSTUI:
             self._display_result_downloads(
                 ("LoRA adapter ZIP", result["adapter_download_path"]),
                 ("test predictions CSV", result["test_result_csv"]),
-                ("prepared input CSV", result.get("prepared_input_csv")),
             )
             finish_hint.value = (
                 "<h3>The training is completed. You can then:</h3>"
@@ -1592,7 +1593,6 @@ class ColabProSSTUI:
             self.display(result.head())
             self._display_result_downloads(
                 ("predictions CSV", result.attrs.get("output_csv")),
-                ("prepared input CSV", result.attrs.get("prepared_input_csv")),
             )
 
         adapter.on_loaded(
@@ -1764,7 +1764,6 @@ class ColabProSSTUI:
                 ("embedding ZIP", result["archive_path"]),
                 ("embeddings PT", result["output_pt"]),
                 ("embedding index CSV", result["output_index_csv"]),
-                ("prepared input CSV", result.get("prepared_input_csv")),
             )
             completion.value = (
                 "<b>Embedding extraction completed.</b><br>"
@@ -1845,7 +1844,6 @@ class ColabProSSTUI:
                 ("mutation scores CSV", result["output_csv"]),
                 ("score matrix CSV", result["output_matrix_csv"]),
                 ("heatmap PNG", result["output_heatmap_png"]),
-                ("prepared input CSV", result.get("prepared_input_csv")),
             )
 
         start_button.on_click(
@@ -1905,7 +1903,6 @@ class ColabProSSTUI:
             self.display(result.head())
             self._display_result_downloads(
                 ("mutation scores CSV", result.attrs.get("output_csv")),
-                ("prepared input CSV", result.attrs.get("prepared_input_csv")),
             )
 
         start_button.on_click(

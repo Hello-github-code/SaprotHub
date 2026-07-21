@@ -855,7 +855,7 @@ class ColabProSSTWorkflow:
         input_mode: str = INPUT_MODE_TOKENS,
         pair_mode: bool = False,
         structure_zip: str = "",
-    ) -> tuple[str, Optional[str]]:
+    ) -> str:
         input_csv = self.maybe_upload_path(input_csv, upload_csv)
         input_mode = str(input_mode).strip().lower()
         if input_mode not in INPUT_MODES:
@@ -869,7 +869,7 @@ class ColabProSSTWorkflow:
                 structure_vocab_size=int(structure_vocab_size),
                 pair_mode=pair_mode,
             )
-            return prepared_csv, prepared_csv
+            return prepared_csv
         if input_mode == INPUT_MODE_STRUCTURE:
             structure_dir = self.maybe_extract_asset_zip(structure_zip)
             if structure_dir is None:
@@ -885,8 +885,8 @@ class ColabProSSTWorkflow:
                 structure_vocab_size=int(structure_vocab_size),
                 pair_mode=pair_mode,
             )
-            return prepared_csv, prepared_csv
-        return input_csv, None
+            return prepared_csv
+        return input_csv
 
     @staticmethod
     def _validate_category_ids(labels, num_labels: int, task_name: str) -> None:
@@ -1022,7 +1022,7 @@ class ColabProSSTWorkflow:
             model_path,
             structure_vocab_size,
         )
-        input_csv, prepared_input_csv = self._prepare_input_csv(
+        input_csv = self._prepare_input_csv(
             input_csv,
             upload_csv,
             "mutation",
@@ -1041,7 +1041,6 @@ class ColabProSSTWorkflow:
             structure_base_dir=None,
         )
         df.attrs["output_csv"] = str(output_path)
-        df.attrs["prepared_input_csv"] = prepared_input_csv
         print("saved mutation scores:", output_path)
         if download:
             self._download(output_path)
@@ -1064,7 +1063,7 @@ class ColabProSSTWorkflow:
             model_path,
             structure_vocab_size,
         )
-        input_csv, prepared_input_csv = self._prepare_input_csv(
+        input_csv = self._prepare_input_csv(
             input_csv,
             upload_csv,
             "saturation",
@@ -1107,7 +1106,6 @@ class ColabProSSTWorkflow:
             for path in [score_path, matrix_path, heatmap_path]:
                 archive.write(path, arcname=path.name)
         result["archive_path"] = str(archive_path)
-        result["prepared_input_csv"] = prepared_input_csv
 
         print("saved saturation scores:", score_path)
         print("saved saturation matrix:", matrix_path)
@@ -1160,7 +1158,7 @@ class ColabProSSTWorkflow:
                     "Embedding artifact structure vocabulary does not match "
                     "the selected model."
                 )
-        input_csv, prepared_input_csv = self._prepare_input_csv(
+        input_csv = self._prepare_input_csv(
             input_csv,
             upload_csv,
             "embedding",
@@ -1210,7 +1208,6 @@ class ColabProSSTWorkflow:
             archive.write(embedding_path, arcname=embedding_path.name)
             archive.write(index_path, arcname=index_path.name)
         result["archive_path"] = str(archive_path)
-        result["prepared_input_csv"] = prepared_input_csv
 
         print("saved embeddings:", embedding_path)
         print("saved embedding index:", index_path)
@@ -1266,7 +1263,7 @@ class ColabProSSTWorkflow:
                 num_labels,
             )
 
-        input_csv, prepared_input_csv = self._prepare_input_csv(
+        input_csv = self._prepare_input_csv(
             input_csv,
             upload_csv,
             f"{task_type}_train",
@@ -1423,7 +1420,6 @@ class ColabProSSTWorkflow:
             "model_path": model_path,
             "structure_vocab_size": structure_vocab_size,
             "initial_adapter": initial_adapter,
-            "prepared_input_csv": prepared_input_csv,
         }
 
     def predict_downstream(
@@ -1449,7 +1445,7 @@ class ColabProSSTWorkflow:
         )
         adapter_path = self.resolve_lora_adapter(adapter_path)
 
-        input_csv, prepared_input_csv = self._prepare_input_csv(
+        input_csv = self._prepare_input_csv(
             input_csv,
             upload_csv,
             f"{task_type}_predict",
@@ -1473,7 +1469,6 @@ class ColabProSSTWorkflow:
             structure_base_dir=None,
         )
         df.attrs["output_csv"] = str(output_path)
-        df.attrs["prepared_input_csv"] = prepared_input_csv
 
         print("saved predictions:", output_path)
         if download:
